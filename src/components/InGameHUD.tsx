@@ -152,3 +152,4 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
     </div>
   );
 };
+

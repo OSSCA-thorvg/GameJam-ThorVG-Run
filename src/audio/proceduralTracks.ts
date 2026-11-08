@@ -126,3 +126,4 @@ export function synthesizeTrackBuffer(
 
   return buffer;
 }
+

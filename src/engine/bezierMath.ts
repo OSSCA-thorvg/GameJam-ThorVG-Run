@@ -66,3 +66,4 @@ export function evaluateBezierFloor(
   }
   return { floorY: fallbackY, slope: 0, angleRad: 0 };
 }
+

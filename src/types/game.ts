@@ -178,3 +178,4 @@ export const FORM_CONFIG: Record<
     skillDesc: '중력을 무시하고 직선으로 장애물을 무적 관통하는 초고속 대시',
   },
 };
+
