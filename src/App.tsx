@@ -1,20 +1,68 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { AudioEngine } from './audio/AudioEngine';
+import { BUILT_IN_TRACKS } from './audio/proceduralTracks';
+import { InGameHUD } from './components/InGameHUD';
+import { ResultModal } from './components/ResultModal';
+import { StartScreen } from './components/StartScreen';
+import { GameEngine } from './engine/GameEngine';
 import { ThorVGRenderer } from './renderer/ThorVGRenderer';
-import { type RendererMode, type ResonanceFormType } from './types/game';
+import {
+  type HUDTelemetry,
+  type RendererMode,
+  type ResonanceFormType,
+  type TrackMetadata,
+} from './types/game';
+
+const INITIAL_HUD: HUDTelemetry = {
+  rendererMode: 'sw',
+  fps: 60,
+  phase: 'MACRO',
+  zoomDisplay: 1.0,
+  score: 0,
+  combo: 1,
+  maxCombo: 1,
+  progress: 0,
+  activeForm: 'synth',
+  resonanceGauge: 40,
+  acousticFilterLabel: 'FULL SPECTRUM (Macro)',
+  statusBanner: null,
+  isFinished: false,
+  trapsDestroyed: 0,
+  divesCompleted: 0,
+};
 
 export const App: React.FC = () => {
   const [rendererMode, setRendererMode] = useState<RendererMode>('sw');
+  const [selectedTrack, setSelectedTrack] = useState<TrackMetadata>(BUILT_IN_TRACKS[0]!);
+  const [customTracks, setCustomTracks] = useState<TrackMetadata[]>([]);
   const [previewForm, setPreviewForm] = useState<ResonanceFormType>('synth');
   const [engineReady, setEngineReady] = useState<boolean>(false);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [inGame, setInGame] = useState<boolean>(false);
+  const [hud, setHud] = useState<HUDTelemetry>(INITIAL_HUD);
 
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const rendererRef = useRef<ThorVGRenderer | null>(null);
+  const audioRef = useRef<AudioEngine | null>(null);
+  const gameEngineRef = useRef<GameEngine | null>(null);
+
+  if (!audioRef.current) {
+    audioRef.current = new AudioEngine();
+  }
+  if (!gameEngineRef.current) {
+    gameEngineRef.current = new GameEngine(audioRef.current, (nextHud) => {
+      setHud(nextHud);
+    });
+  }
+
+  // Initialize ThorVG WASM ('sw' SwCanvas or 'gl' GlCanvas) on fresh <canvas key={rendererMode} />
   useEffect(() => {
     const canvasEl = canvasRef.current;
     if (!canvasEl) return;
 
     let cancelled = false;
-    let rafId = 0;
+    let previewRafId = 0;
     const renderer = new ThorVGRenderer(rendererMode);
+    rendererRef.current = renderer;
     setEngineReady(false);
 
     renderer
@@ -22,62 +70,174 @@ export const App: React.FC = () => {
       .then(() => {
         if (cancelled) return;
         setEngineReady(true);
-        const start = performance.now();
-        const tick = (now: number) => {
-          if (cancelled) return;
-          renderer.renderPreviewFrame((now - start) / 1000, previewForm);
-          rafId = requestAnimationFrame(tick);
-        };
-        rafId = requestAnimationFrame(tick);
+        gameEngineRef.current?.attachRenderer(
+          renderer,
+          rendererMode,
+          window.innerWidth,
+          window.innerHeight
+        );
+
+        if (!inGame) {
+          const start = performance.now();
+          const renderMenuLoop = (now: number) => {
+            if (cancelled || inGame) return;
+            renderer.renderPreviewFrame((now - start) / 1000, previewForm);
+            previewRafId = requestAnimationFrame(renderMenuLoop);
+          };
+          previewRafId = requestAnimationFrame(renderMenuLoop);
+        }
       })
       .catch((err) => {
-        console.error('ThorVG initialization failed:', err);
+        console.error('ThorVG WASM Renderer initialization error:', err);
       });
 
     return () => {
       cancelled = true;
-      cancelAnimationFrame(rafId);
+      cancelAnimationFrame(previewRafId);
       renderer.destroy();
+      if (rendererRef.current === renderer) {
+        rendererRef.current = null;
+      }
     };
-  }, [rendererMode, previewForm]);
+  }, [rendererMode, inGame, previewForm]);
+
+  // Responsive viewport resize listener
+  useEffect(() => {
+    const onResize = () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      rendererRef.current?.resize(w, h);
+      gameEngineRef.current?.resize(w, h);
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // Keyboard controls for Jump / Phase Invert, Dash / Form Skill, and Resonance Swap
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!inGame) return;
+      if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
+        e.preventDefault();
+        gameEngineRef.current?.handlePrimaryAction();
+      } else if (
+        e.code === 'ShiftLeft' ||
+        e.code === 'ShiftRight' ||
+        e.code === 'ArrowDown' ||
+        e.code === 'KeyS'
+      ) {
+        e.preventDefault();
+        gameEngineRef.current?.handleSecondaryAction();
+      } else if (e.code === 'Digit1') {
+        gameEngineRef.current?.handleFormSwap('bass');
+      } else if (e.code === 'Digit2') {
+        gameEngineRef.current?.handleFormSwap('synth');
+      } else if (e.code === 'Digit3') {
+        gameEngineRef.current?.handleFormSwap('treble');
+      } else if (e.code === 'KeyQ') {
+        gameEngineRef.current?.handleFormSwap();
+      } else if (e.code === 'Escape') {
+        gameEngineRef.current?.stopRun();
+        setInGame(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [inGame]);
+
+  const handleUploadFile = useCallback(async (file: File) => {
+    if (!audioRef.current) return;
+    const decodedTrack = await audioRef.current.decodeLocalFile(file);
+    setCustomTracks((prev) => [decodedTrack, ...prev]);
+    setSelectedTrack(decodedTrack);
+  }, []);
+
+  const handleStartRun = useCallback(() => {
+    setHud((prev) => ({
+      ...INITIAL_HUD,
+      rendererMode,
+      activeForm: prev.activeForm,
+    }));
+    setInGame(true);
+    void gameEngineRef.current?.startRun(selectedTrack);
+  }, [rendererMode, selectedTrack]);
+
+  const handleReturnToMenu = useCallback(() => {
+    gameEngineRef.current?.stopRun();
+    setInGame(false);
+  }, []);
+
+  const handleSwitchRendererAndReplay = useCallback(
+    (nextMode: RendererMode) => {
+      gameEngineRef.current?.stopRun();
+      setRendererMode(nextMode);
+      setTimeout(() => {
+        setInGame(true);
+        void gameEngineRef.current?.startRun(selectedTrack);
+      }, 120);
+    },
+    [selectedTrack]
+  );
 
   return (
-    <div className="app-shell">
-      {/* Canvas DOM is isolated per rendererMode via key={rendererMode} */}
+    <div
+      className="app-shell"
+      onMouseDown={(e) => {
+        if (!inGame || hud.isFinished) return;
+        // Ignore clicks on HUD buttons
+        if ((e.target as HTMLElement).closest('button')) return;
+        if (e.button === 0) {
+          gameEngineRef.current?.handlePrimaryAction();
+        } else if (e.button === 2) {
+          gameEngineRef.current?.handleSecondaryAction();
+        }
+      }}
+      onContextMenu={(e) => {
+        if (inGame) e.preventDefault();
+      }}
+    >
+      {/* Keyed by rendererMode so React cleanly replaces DOM <canvas> on CPU <-> GPU switch */}
       <canvas
         key={rendererMode}
         ref={canvasRef}
         id="tvg-canvas"
         className="tvg-canvas"
       />
-      <div className="overlay-panel">
-        <h1>THORVG RUN</h1>
-        <p>
-          Active Backend: <strong>{rendererMode === 'sw' ? 'CPU [SwCanvas]' : 'GPU [GlCanvas - WebGL2]'}</strong>{' '}
-          ({engineReady ? 'Ready' : 'Initializing...'})
-        </p>
-        <div className="toggle-row">
-          <button
-            type="button"
-            className={rendererMode === 'sw' ? 'active' : ''}
-            onClick={() => setRendererMode('sw')}
-          >
-            🖥️ CPU Rendering (SwCanvas)
-          </button>
-          <button
-            type="button"
-            className={rendererMode === 'gl' ? 'active' : ''}
-            onClick={() => setRendererMode('gl')}
-          >
-            🚀 GPU Rendering (GlCanvas)
-          </button>
-        </div>
-        <div className="toggle-row">
-          <button type="button" onClick={() => setPreviewForm('bass')}>Bass Form</button>
-          <button type="button" onClick={() => setPreviewForm('synth')}>Synth Form</button>
-          <button type="button" onClick={() => setPreviewForm('treble')}>Treble Form</button>
-        </div>
-      </div>
+
+      {!inGame && (
+        <StartScreen
+          selectedTrack={selectedTrack}
+          customTracks={customTracks}
+          rendererMode={rendererMode}
+          previewForm={previewForm}
+          engineReady={engineReady}
+          onSelectTrack={setSelectedTrack}
+          onUploadFile={handleUploadFile}
+          onSelectRenderer={setRendererMode}
+          onSelectPreviewForm={setPreviewForm}
+          onStartRun={handleStartRun}
+        />
+      )}
+
+      {inGame && (
+        <InGameHUD
+          hud={hud}
+          trackTitle={selectedTrack.title}
+          onReturnToMenu={handleReturnToMenu}
+          onToggleRendererInGame={(nextMode) => setRendererMode(nextMode)}
+          onSwapForm={(form) => gameEngineRef.current?.handleFormSwap(form)}
+        />
+      )}
+
+      {inGame && hud.isFinished && (
+        <ResultModal
+          hud={hud}
+          trackTitle={selectedTrack.title}
+          onReplay={handleStartRun}
+          onSwitchRendererAndReplay={handleSwitchRendererAndReplay}
+          onReturnToMenu={handleReturnToMenu}
+        />
+      )}
     </div>
   );
 };
