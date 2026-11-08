@@ -1,4 +1,5 @@
 import React from 'react';
+import { useI18n } from '../i18n/I18nProvider';
 import { FORM_CONFIG, type HUDTelemetry, type RendererMode } from '../types/game';
 
 interface ResultModalProps {
@@ -16,59 +17,55 @@ export const ResultModal: React.FC<ResultModalProps> = ({
   onSwitchRendererAndReplay,
   onReturnToMenu,
 }) => {
+  const { t, format } = useI18n();
   const formCfg = FORM_CONFIG[hud.activeForm];
   const nextMode: RendererMode = hud.rendererMode === 'sw' ? 'gl' : 'sw';
 
   return (
     <div className="result-modal-backdrop">
       <div className="result-modal-card" style={{ borderColor: formCfg.colorHex }}>
-        <span className="result-badge">TRACK COMPLETE · RESONANCE SYNCHRONIZED</span>
+        <span className="result-badge">{t.result.badge}</span>
         <h2>{trackTitle}</h2>
-        <p className="result-Engine-tag">
-          Rendered via{' '}
-          <strong>
-            {hud.rendererMode === 'sw'
-              ? 'ThorVG SwCanvas (CPU Rasterizer)'
-              : 'ThorVG GlCanvas (WebGL2 GPU)'}
-          </strong>
+        <p className="result-engine-tag">
+          {t.result.renderedVia}{' '}
+          <strong>{hud.rendererMode === 'sw' ? t.result.cpuEngine : t.result.gpuEngine}</strong>
         </p>
 
         <div className="result-stats-grid">
           <div className="stat-item">
-            <small>FINAL SCORE</small>
+            <small>{t.result.finalScore}</small>
             <strong>{hud.score.toLocaleString()}</strong>
           </div>
           <div className="stat-item">
-            <small>MAX COMBO</small>
+            <small>{t.result.maxCombo}</small>
             <strong style={{ color: formCfg.colorHex }}>x{hud.maxCombo}</strong>
           </div>
           <div className="stat-item">
-            <small>INFINITE DIVES</small>
-            <strong>{hud.divesCompleted}회</strong>
+            <small>{t.result.dives}</small>
+            <strong>{format(t.result.divesValue, { count: hud.divesCompleted })}</strong>
           </div>
           <div className="stat-item">
-            <small>TRAPS SHATTERED</small>
-            <strong>{hud.trapsDestroyed}개</strong>
+            <small>{t.result.traps}</small>
+            <strong>{format(t.result.trapsValue, { count: hud.trapsDestroyed })}</strong>
           </div>
         </div>
 
         <div className="result-actions">
           <button type="button" className="primary-btn" onClick={onReplay}>
-            ▶ 현재 렌더러로 다시 달리기
+            {t.result.replay}
           </button>
           <button
             type="button"
             className="secondary-btn"
             onClick={() => onSwitchRendererAndReplay(nextMode)}
           >
-            🔄 {nextMode === 'gl' ? 'GPU (GlCanvas)' : 'CPU (SwCanvas)'} 모드로 비교 플레이
+            {nextMode === 'gl' ? t.result.compareGpu : t.result.compareCpu}
           </button>
           <button type="button" className="ghost-btn" onClick={onReturnToMenu}>
-            ⚙️ 메인 메뉴로 돌아가기
+            {t.result.backToMenu}
           </button>
         </div>
       </div>
     </div>
   );
 };
-

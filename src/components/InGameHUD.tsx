@@ -1,4 +1,6 @@
 import React from 'react';
+import { resolveBanner } from '../i18n/display';
+import { useI18n } from '../i18n/I18nProvider';
 import {
   FORM_CONFIG,
   type HUDTelemetry,
@@ -21,41 +23,41 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
   onToggleRendererInGame,
   onSwapForm,
 }) => {
+  const { t, format } = useI18n();
   const formCfg = FORM_CONFIG[hud.activeForm];
+  const formText = t.forms[hud.activeForm];
   const progressPct = Math.min(100, Math.max(0, Math.round(hud.progress * 100)));
 
   return (
     <div className="hud-overlay">
-      {/* 상단 좌측: 렌더러 배지, 실시간 FPS, 스케일 배율(ZOOM) */}
+      {/* Top-left: renderer badge, live FPS, zoom scale */}
       <div className="hud-top-left">
         <div className="hud-badge-row">
-          <span
-            className={`renderer-badge ${hud.rendererMode === 'gl' ? 'gpu' : 'cpu'}`}
-          >
-            {hud.rendererMode === 'sw'
-              ? 'MODE: CPU [SwCanvas]'
-              : 'MODE: GPU [GlCanvas]'}
+          <span className={`renderer-badge ${hud.rendererMode === 'gl' ? 'gpu' : 'cpu'}`}>
+            {hud.rendererMode === 'sw' ? t.hud.modeCpu : t.hud.modeGpu}
           </span>
           <span className="fps-badge">FPS: {hud.fps}</span>
-          <span className="zoom-badge">
-            ZOOM: {hud.zoomDisplay.toFixed(1)}x
-          </span>
+          <span className="zoom-badge">ZOOM: {hud.zoomDisplay.toFixed(1)}x</span>
         </div>
         <div className="hud-sub-status">
-          <span>PHASE: <strong>{hud.phase}</strong></span>
-          <span>AUDIO FILTER: <strong>{hud.acousticFilterLabel}</strong></span>
+          <span>
+            {t.hud.phase}: <strong>{t.phases[hud.phase]}</strong>
+          </span>
+          <span>
+            {t.hud.audioFilter}: <strong>{t.filter[hud.acousticFilter]}</strong>
+          </span>
         </div>
       </div>
 
-      {/* 상단 우측: 점수, 콤보, 곡 진행도 프로그레스 바, 메뉴 복귀(렌더러 변경) 버튼 */}
+      {/* Top-right: score, combo, track progress, menu / renderer controls */}
       <div className="hud-top-right">
         <div className="score-row">
           <div className="score-box">
-            <small>SCORE</small>
+            <small>{t.hud.score}</small>
             <strong>{hud.score.toLocaleString()}</strong>
           </div>
           <div className="combo-box">
-            <small>COMBO</small>
+            <small>{t.hud.combo}</small>
             <strong style={{ color: formCfg.colorHex }}>x{hud.combo}</strong>
           </div>
         </div>
@@ -68,10 +70,7 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
           <div className="progress-track">
             <div
               className="progress-fill"
-              style={{
-                width: `${progressPct}%`,
-                backgroundColor: formCfg.colorHex,
-              }}
+              style={{ width: `${progressPct}%`, backgroundColor: formCfg.colorHex }}
             />
           </div>
         </div>
@@ -80,33 +79,24 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
           <button
             type="button"
             className="hud-btn"
-            onClick={() =>
-              onToggleRendererInGame(hud.rendererMode === 'sw' ? 'gl' : 'sw')
-            }
+            onClick={() => onToggleRendererInGame(hud.rendererMode === 'sw' ? 'gl' : 'sw')}
           >
-            ⚡ {hud.rendererMode === 'sw' ? 'GPU(GlCanvas)로 전환' : 'CPU(SwCanvas)로 전환'}
+            {hud.rendererMode === 'sw' ? t.hud.toGpu : t.hud.toCpu}
           </button>
-          <button
-            type="button"
-            className="hud-btn menu-return-btn"
-            onClick={onReturnToMenu}
-          >
-            [ 메뉴로 돌아가기 ( 렌더러 변경 ) ]
+          <button type="button" className="hud-btn menu-return-btn" onClick={onReturnToMenu}>
+            {t.hud.menuReturn}
           </button>
         </div>
       </div>
 
-      {/* 중앙 다이빙/변신 알림 배너 */}
+      {/* Center: dive / swap banner */}
       {hud.statusBanner && (
-        <div
-          className="hud-center-banner"
-          style={{ borderColor: formCfg.colorHex }}
-        >
-          {hud.statusBanner}
+        <div className="hud-center-banner" style={{ borderColor: formCfg.colorHex }}>
+          {resolveBanner(t, hud.statusBanner)}
         </div>
       )}
 
-      {/* 하단 중앙: 현재 장착 중인 주파수 공명 폼 아이콘 및 공명 게이지 바 */}
+      {/* Bottom-center: equipped resonance form and gauge */}
       <div className="hud-bottom-center">
         <div className="resonance-forms-strip">
           {(['bass', 'synth', 'treble'] as ResonanceFormType[]).map((formKey, idx) => {
@@ -124,8 +114,8 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
                 onClick={() => onSwapForm(formKey)}
               >
                 <span className="pill-key">[{idx + 1}]</span>
-                <strong style={{ color: cfg.colorHex }}>{cfg.name.replace(' FORM', '')}</strong>
-                <small>{cfg.skillName.split('(')[0]}</small>
+                <strong style={{ color: cfg.colorHex }}>{t.forms[formKey].short}</strong>
+                <small>{t.forms[formKey].skillName}</small>
               </button>
             );
           })}
@@ -134,17 +124,14 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
         <div className="gauge-wrapper">
           <div className="gauge-header">
             <span style={{ color: formCfg.colorHex }}>
-              ◆ {formCfg.name} — {formCfg.skillDesc}
+              ◆ {formText.name} — {formText.skillDesc}
             </span>
-            <strong>RESONANCE {hud.resonanceGauge}%</strong>
+            <strong>{format(t.hud.resonance, { value: hud.resonanceGauge })}</strong>
           </div>
           <div className="gauge-bar-bg">
             <div
               className="gauge-bar-fill"
-              style={{
-                width: `${hud.resonanceGauge}%`,
-                backgroundColor: formCfg.colorHex,
-              }}
+              style={{ width: `${hud.resonanceGauge}%`, backgroundColor: formCfg.colorHex }}
             />
           </div>
         </div>
@@ -152,4 +139,3 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
     </div>
   );
 };
-

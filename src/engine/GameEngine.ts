@@ -3,6 +3,7 @@ import { ThorVGRenderer } from '../renderer/ThorVGRenderer';
 import {
   FORM_CONFIG,
   type AfterimageTrail,
+  type BannerMessage,
   type GamePhase,
   type HUDTelemetry,
   type MicroGate,
@@ -80,7 +81,7 @@ export class GameEngine {
   private maxCombo: number = 1;
   private trapsDestroyed: number = 0;
   private divesCompleted: number = 0;
-  private statusBanner: string | null = null;
+  private statusBanner: BannerMessage | null = null;
   private statusBannerTimer: number = 0;
 
   private shockwaves: ShockwaveEffect[] = [];
@@ -167,7 +168,7 @@ export class GameEngine {
     this.shockwaves = [];
     this.afterimages = [];
     this.particles = [];
-    this.setBanner('SYNTH FORM READY — JUMP [SPACE] / DASH [SHIFT]', 2.4);
+    this.setBanner({ key: 'ready' }, 2.4);
   }
 
   /**
@@ -224,10 +225,7 @@ export class GameEngine {
     this.jumpsRemaining = this.playerController.profile.maxJumps;
     const playerScreenX = this.width * PLAYER_SCREEN_X_RATIO;
     this.spawnBurst(playerScreenX, this.playerY, FORM_CONFIG[nextForm].rgb, 18);
-    this.setBanner(
-      `🔄 RESONANCE SWAP: ${FORM_CONFIG[nextForm].name} (${FORM_CONFIG[nextForm].skillName})`,
-      1.6
-    );
+    this.setBanner({ key: 'manualSwap', params: { form: nextForm } }, 1.6);
   }
 
   /**
@@ -271,7 +269,7 @@ export class GameEngine {
     if (profile.piercesTrapsDuringDash) {
       // Treble Form: Blink Dash grants temporary invulnerability to pierce Beat Traps
       this.invulnerableTimer = Math.max(this.invulnerableTimer, profile.dashDurationSec + 0.08);
-      this.setBanner('⚡ TREBLE BLINK DASH — PIERCE ACTIVE', 0.9);
+      this.setBanner({ key: 'blinkDash' }, 0.9);
     }
   }
 
@@ -384,7 +382,7 @@ export class GameEngine {
       progress,
       activeForm: this.activeForm,
       resonanceGauge: Math.min(100, Math.max(0, Math.round(this.resonanceGauge))),
-      acousticFilterLabel: this.audio.getAcousticFilterLabel(),
+      acousticFilter: this.audio.getAcousticZoomMode(),
       statusBanner: this.statusBanner,
       isFinished,
       trapsDestroyed: this.trapsDestroyed,
@@ -486,7 +484,7 @@ export class GameEngine {
             this.combo = 1;
             this.invulnerableTimer = 1.1;
             this.playerVy = -420;
-            this.setBanner('⚠️ BEAT TRAP IMPACT — COMBO RESET', 1.2);
+            this.setBanner({ key: 'trapHit' }, 1.2);
             this.spawnBurst(playerScreenX, this.playerY, [255, 50, 95], 16);
           }
         }
@@ -525,7 +523,9 @@ export class GameEngine {
     this.maxCombo = Math.max(this.maxCombo, this.combo);
     this.score += (300 + shattered * 250) * this.combo;
     this.setBanner(
-      `💥 BASS SHOCKWAVE! ${shattered > 0 ? `${shattered} TRAPS SHATTERED` : 'IMPACT'}`,
+      shattered > 0
+        ? { key: 'shockwave', params: { count: shattered } }
+        : { key: 'shockwaveNoHit' },
       1.3
     );
   }
@@ -547,10 +547,7 @@ export class GameEngine {
 
     // Activate Web Audio BiquadFilterNode Acoustic Zoom for the selected frequency layer
     this.audio.setAcousticZoom(targetForm);
-    this.setBanner(
-      `🔍 ACOUSTIC ZOOM IN: ${FORM_CONFIG[targetForm].bandLabel}`,
-      1.5
-    );
+    this.setBanner({ key: 'zoomIn', params: { form: targetForm } }, 1.5);
   }
 
   private updateZoomInTransition(dt: number, playerScreenX: number): void {
@@ -588,10 +585,7 @@ export class GameEngine {
         this.nextMicroGateX += 270;
       }
 
-      this.setBanner(
-        `⚡ MICRO VIEW [64.0x REBASED] — PRESS [SPACE] TO PHASE INVERT (+A ↔ -A)`,
-        2.2
-      );
+      this.setBanner({ key: 'microEnter' }, 2.2);
     }
   }
 
@@ -653,10 +647,7 @@ export class GameEngine {
         FORM_CONFIG[this.activeForm].rgb,
         32
       );
-      this.setBanner(
-        `🔥 RESONANCE SWAP: ${FORM_CONFIG[this.activeForm].name} ACTIVATED!`,
-        2.4
-      );
+      this.setBanner({ key: 'resonanceSwap', params: { form: this.activeForm } }, 2.4);
     }
   }
 
@@ -731,8 +722,8 @@ export class GameEngine {
     }
   }
 
-  private setBanner(text: string, durationSec: number): void {
-    this.statusBanner = text;
+  private setBanner(message: BannerMessage, durationSec: number): void {
+    this.statusBanner = message;
     this.statusBannerTimer = durationSec;
   }
 }

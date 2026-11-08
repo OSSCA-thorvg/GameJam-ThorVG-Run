@@ -1,5 +1,8 @@
 import React, { useRef, useState } from 'react';
 import { BUILT_IN_TRACKS } from '../audio/proceduralTracks';
+import { trackArtist, trackTitle } from '../i18n/display';
+import { useI18n } from '../i18n/I18nProvider';
+import { LANGUAGE_LABELS, type Lang } from '../i18n/messages';
 import {
   FORM_CONFIG,
   type RendererMode,
@@ -20,6 +23,8 @@ interface StartScreenProps {
   onStartRun: () => void;
 }
 
+const LANGS: Lang[] = ['en', 'ko'];
+
 export const StartScreen: React.FC<StartScreenProps> = ({
   selectedTrack,
   customTracks,
@@ -32,6 +37,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
   onSelectPreviewForm,
   onStartRun,
 }) => {
+  const { lang, setLang, t, format } = useI18n();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
@@ -40,15 +46,15 @@ export const StartScreen: React.FC<StartScreenProps> = ({
     if (!files || files.length === 0) return;
     const file = files[0]!;
     if (!/\.(mp3|ogg|wav)$/i.test(file.name) && !file.type.startsWith('audio/')) {
-      setUploadStatus('지원 포맷: .mp3, .ogg, .wav 오디오 파일만 가능합니다.');
+      setUploadStatus(format(t.upload.errors.unsupported, { list: 'MP3, OGG, WAV' }));
       return;
     }
-    setUploadStatus(`음원 분석 중: ${file.name}...`);
+    setUploadStatus(format(t.upload.analyzing, { name: file.name }));
     try {
       await onUploadFile(file);
-      setUploadStatus(`로드 완료: ${file.name}`);
+      setUploadStatus(format(t.upload.loaded, { name: file.name }));
     } catch {
-      setUploadStatus('오디오 파일 디코딩에 실패했습니다.');
+      setUploadStatus(t.upload.errors.decode_failed);
     }
   };
 
@@ -71,28 +77,43 @@ export const StartScreen: React.FC<StartScreenProps> = ({
       <div className={`start-card ${isDragging ? 'dragging' : ''}`}>
         <header className="start-header">
           <div>
-            <span className="badge-version">ThorVG WASM v1.1.3 · Web Lightweight v3.1</span>
+            <span className="badge-version">{t.menu.versionBadge}</span>
             <h1 className="title-logo">THORVG RUN</h1>
-            <p className="subtitle">
-              2D 벡터 오디오 파형 무한 스케일 액션 플랫포머
-            </p>
+            <p className="subtitle">{t.menu.subtitle}</p>
           </div>
-          <a
-            href="https://github.com/OSSCA-thorvg/GameJam-ThorVG-Run"
-            target="_blank"
-            rel="noreferrer"
-            className="github-link"
-          >
-            GitHub Repository ↗
-          </a>
+          <div className="header-actions">
+            <div className="lang-toggle" role="group" aria-label={t.menu.language}>
+              {LANGS.map((code) => (
+                <button
+                  key={code}
+                  type="button"
+                  lang={code}
+                  className={`lang-btn ${lang === code ? 'active' : ''}`}
+                  aria-pressed={lang === code}
+                  onClick={() => setLang(code)}
+                >
+                  {LANGUAGE_LABELS[code]}
+                </button>
+              ))}
+            </div>
+            <a
+              href="https://github.com/OSSCA-thorvg/GameJam-ThorVG-Run"
+              target="_blank"
+              rel="noreferrer"
+              className="github-link"
+            >
+              {t.menu.github}
+            </a>
+          </div>
         </header>
 
-        {/* 1. 음원 선택 (Select Track) */}
+        {/* 1. Select Track */}
         <section className="menu-section">
-          <h2>1. 음원 선택 (Select Track)</h2>
+          <h2>{t.menu.trackSection}</h2>
           <div className="track-list">
             {allTracks.map((track, idx) => {
               const isSelected = selectedTrack.id === track.id;
+              const title = trackTitle(t, track);
               return (
                 <button
                   key={track.id}
@@ -104,23 +125,23 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                   <div className="track-meta">
                     <strong>
                       {track.isCustom
-                        ? `커스텀 트랙: ${track.title}`
-                        : `기본 샘플 트랙 ${idx + 1}: ${track.title}`}
+                        ? format(t.menu.customTrack, { title })
+                        : format(t.menu.builtInTrack, { index: idx + 1, title })}
                     </strong>
                     <span>
-                      {track.artist} · {track.durationSec}s
+                      {format(t.menu.trackMeta, {
+                        artist: trackArtist(t, track),
+                        seconds: track.durationSec,
+                      })}
                     </span>
                   </div>
-                  {isSelected && <span className="selected-pill">SELECTED</span>}
+                  {isSelected && <span className="selected-pill">{t.menu.selected}</span>}
                 </button>
               );
             })}
           </div>
 
-          <div
-            className="upload-dropzone"
-            onClick={() => fileInputRef.current?.click()}
-          >
+          <div className="upload-dropzone" onClick={() => fileInputRef.current?.click()}>
             <input
               ref={fileInputRef}
               type="file"
@@ -128,14 +149,14 @@ export const StartScreen: React.FC<StartScreenProps> = ({
               style={{ display: 'none' }}
               onChange={(e) => void handleFiles(e.target.files)}
             />
-            <span>📂 내 PC 음원 업로드 (.mp3 / .ogg / .wav 클릭 또는 드래그 앤 드롭)</span>
+            <span>{t.upload.dropzone}</span>
             {uploadStatus && <small className="upload-status">{uploadStatus}</small>}
           </div>
         </section>
 
-        {/* 2. ThorVG 렌더러 엔진 선택 (Select Renderer Backend) */}
+        {/* 2. Select Renderer Backend */}
         <section className="menu-section">
-          <h2>2. ThorVG 렌더러 엔진 선택 (Select Renderer Backend)</h2>
+          <h2>{t.menu.rendererSection}</h2>
           <div className="renderer-radio-group">
             <label
               className={`renderer-option ${rendererMode === 'sw' ? 'selected' : ''}`}
@@ -149,8 +170,8 @@ export const StartScreen: React.FC<StartScreenProps> = ({
               />
               <span className="radio-dot" />
               <div className="renderer-info">
-                <strong>🖥️ CPU Rendering (ThorVG SwCanvas - Software Rasterizer)</strong>
-                <span>WASM 내부 멀티스레드/소프트웨어 벡터 래스터라이저 → Canvas2D 픽셀 출력</span>
+                <strong>{t.menu.rendererCpuTitle}</strong>
+                <span>{t.menu.rendererCpuDesc}</span>
               </div>
             </label>
 
@@ -166,33 +187,32 @@ export const StartScreen: React.FC<StartScreenProps> = ({
               />
               <span className="radio-dot" />
               <div className="renderer-info">
-                <strong>🚀 GPU Rendering (ThorVG GlCanvas - WebGL2 Accelerated)</strong>
-                <span>WebGL2 하드웨어 셰이더 파이프라인 바인딩 → 초고속 GPU 벡터 가속</span>
+                <strong>{t.menu.rendererGpuTitle}</strong>
+                <span>{t.menu.rendererGpuDesc}</span>
               </div>
             </label>
           </div>
         </section>
 
-        {/* 3. 주파수 공명 변신 (Resonance Swap) 프리뷰 */}
+        {/* 3. Resonance Form Preview */}
         <section className="menu-section">
-          <h2>3. 주파수 공명 변신 폼 프리뷰 (Skul-Style Resonance Swap)</h2>
+          <h2>{t.menu.formSection}</h2>
           <div className="form-preview-tabs">
             {(['bass', 'synth', 'treble'] as ResonanceFormType[]).map((f) => {
               const cfg = FORM_CONFIG[f];
+              const text = t.forms[f];
               const active = previewForm === f;
               return (
                 <button
                   key={f}
                   type="button"
                   className={`form-tab ${active ? 'active' : ''}`}
-                  style={{
-                    borderColor: active ? cfg.colorHex : undefined,
-                  }}
+                  style={{ borderColor: active ? cfg.colorHex : undefined }}
                   onClick={() => onSelectPreviewForm(f)}
                 >
-                  <strong style={{ color: cfg.colorHex }}>{cfg.name}</strong>
-                  <small>{cfg.bandLabel}</small>
-                  <span>{cfg.skillName}</span>
+                  <strong style={{ color: cfg.colorHex }}>{text.name}</strong>
+                  <small>{text.band}</small>
+                  <span>{text.skillName}</span>
                 </button>
               );
             })}
@@ -206,16 +226,21 @@ export const StartScreen: React.FC<StartScreenProps> = ({
             disabled={!engineReady}
             onClick={onStartRun}
           >
-            {engineReady ? '▶ START RUN (게임 시작)' : '⏳ ThorVG WASM 초기화 중...'}
+            {engineReady ? t.menu.start : t.menu.initializing}
           </button>
           <div className="controls-hint">
-            <span><strong>Space / 좌클릭</strong>: 점프 & Micro 위상 반전(+A↔-A)</span>
-            <span><strong>Shift / 우클릭</strong>: 폼 고유 액션(충격파 / 대시 / 블링크)</span>
-            <span><strong>1·2·3 / Q</strong>: 주파수 공명 폼 즉시 스왑</span>
+            <span>
+              <strong>{t.menu.controls.jumpKey}</strong>: {t.menu.controls.jumpDesc}
+            </span>
+            <span>
+              <strong>{t.menu.controls.skillKey}</strong>: {t.menu.controls.skillDesc}
+            </span>
+            <span>
+              <strong>{t.menu.controls.swapKey}</strong>: {t.menu.controls.swapDesc}
+            </span>
           </div>
         </footer>
       </div>
     </div>
   );
 };
-

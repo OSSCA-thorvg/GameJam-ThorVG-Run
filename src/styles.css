@@ -689,3 +689,37 @@ body,
   background: rgba(255, 255, 255, 0.08);
   color: #cbd9f0;
 }
+
+/* ==================== Language Toggle ==================== */
+.header-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.lang-toggle {
+  display: inline-flex;
+  border: 1px solid rgba(5, 213, 255, 0.35);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.lang-btn {
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  color: #9cb3d9;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.lang-btn + .lang-btn {
+  border-left: 1px solid rgba(5, 213, 255, 0.35);
+}
+
+.lang-btn.active {
+  background: rgba(5, 213, 255, 0.22);
+  color: #ffffff;
+}

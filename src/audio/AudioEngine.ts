@@ -1,7 +1,5 @@
-import type { FrequencyBands, ResonanceFormType, TrackMetadata } from '../types/game';
+import type { AcousticZoomMode, FrequencyBands, TrackMetadata } from '../types/game';
 import { BUILT_IN_TRACKS, synthesizeTrackBuffer } from './proceduralTracks';
-
-export type AcousticZoomMode = 'macro' | ResonanceFormType;
 
 /**
  * Web Audio API Engine for ThorVG Run.
@@ -168,17 +166,9 @@ export class AudioEngine {
     }
   }
 
-  public getAcousticFilterLabel(): string {
-    switch (this.currentZoomMode) {
-      case 'bass':
-        return 'LOW-PASS (20~250Hz Isolated)';
-      case 'synth':
-        return 'BAND-PASS (250Hz~4kHz Isolated)';
-      case 'treble':
-        return 'HIGH-PASS (4kHz~20kHz Isolated)';
-      default:
-        return 'FULL SPECTRUM (Macro)';
-    }
+  /** Current Acoustic Zoom mode. The UI localizes it via `t.filter[mode]`. */
+  public getAcousticZoomMode(): AcousticZoomMode {
+    return this.currentZoomMode;
   }
 
   /**

@@ -5,6 +5,8 @@ import { InGameHUD } from './components/InGameHUD';
 import { ResultModal } from './components/ResultModal';
 import { StartScreen } from './components/StartScreen';
 import { GameEngine } from './engine/GameEngine';
+import { trackTitle } from './i18n/display';
+import { useI18n } from './i18n/I18nProvider';
 import { ThorVGRenderer } from './renderer/ThorVGRenderer';
 import {
   type HUDTelemetry,
@@ -24,7 +26,7 @@ const INITIAL_HUD: HUDTelemetry = {
   progress: 0,
   activeForm: 'synth',
   resonanceGauge: 40,
-  acousticFilterLabel: 'FULL SPECTRUM (Macro)',
+  acousticFilter: 'macro',
   statusBanner: null,
   isFinished: false,
   trapsDestroyed: 0,
@@ -32,6 +34,7 @@ const INITIAL_HUD: HUDTelemetry = {
 };
 
 export const App: React.FC = () => {
+  const { t } = useI18n();
   const [rendererMode, setRendererMode] = useState<RendererMode>('sw');
   const [selectedTrack, setSelectedTrack] = useState<TrackMetadata>(BUILT_IN_TRACKS[0]!);
   const [customTracks, setCustomTracks] = useState<TrackMetadata[]>([]);
@@ -222,7 +225,7 @@ export const App: React.FC = () => {
       {inGame && (
         <InGameHUD
           hud={hud}
-          trackTitle={selectedTrack.title}
+          trackTitle={trackTitle(t, selectedTrack)}
           onReturnToMenu={handleReturnToMenu}
           onToggleRendererInGame={(nextMode) => setRendererMode(nextMode)}
           onSwapForm={(form) => gameEngineRef.current?.handleFormSwap(form)}
@@ -232,7 +235,7 @@ export const App: React.FC = () => {
       {inGame && hud.isFinished && (
         <ResultModal
           hud={hud}
-          trackTitle={selectedTrack.title}
+          trackTitle={trackTitle(t, selectedTrack)}
           onReplay={handleStartRun}
           onSwitchRendererAndReplay={handleSwitchRendererAndReplay}
           onReturnToMenu={handleReturnToMenu}

@@ -1,3 +1,5 @@
+import type { BannerKey } from '../i18n/messages';
+
 export type RendererMode = 'sw' | 'gl';
 
 export type ResonanceFormType = 'bass' | 'synth' | 'treble';
@@ -131,51 +133,51 @@ export interface HUDTelemetry {
   progress: number; // 0.0 ~ 1.0
   activeForm: ResonanceFormType;
   resonanceGauge: number; // 0 ~ 100
-  acousticFilterLabel: string;
-  statusBanner: string | null;
+  acousticFilter: AcousticZoomMode;
+  statusBanner: BannerMessage | null;
   isFinished: boolean;
   trapsDestroyed: number;
   divesCompleted: number;
 }
 
+/** Acoustic Zoom filter state. 'macro' = full spectrum, otherwise the isolated band. */
+export type AcousticZoomMode = 'macro' | ResonanceFormType;
+
+/**
+ * Language-agnostic status banner emitted by the engine.
+ * The UI layer resolves `key` and `params` into localized text.
+ */
+export interface BannerMessage {
+  key: BannerKey;
+  params?: {
+    form?: ResonanceFormType;
+    count?: number;
+  };
+}
+
+/** Visual-only form config. User-facing names/descriptions live in `src/i18n/messages.ts`. */
 export const FORM_CONFIG: Record<
   ResonanceFormType,
   {
-    name: string;
-    bandLabel: string;
     colorHex: string;
     rgb: [number, number, number];
     secondaryRgb: [number, number, number];
-    skillName: string;
-    skillDesc: string;
   }
 > = {
   bass: {
-    name: 'BASS FORM',
-    bandLabel: '20Hz ~ 250Hz (Low)',
     colorHex: '#FF2A6D',
     rgb: [255, 42, 109],
     secondaryRgb: [255, 130, 170],
-    skillName: '착지 충격파 (Shockwave)',
-    skillDesc: '공중 급강하(S/Shift) 착지 시 파동으로 전방 비트 트랩 파괴',
   },
   synth: {
-    name: 'SYNTH FORM',
-    bandLabel: '250Hz ~ 4kHz (Mid)',
     colorHex: '#05D5FF',
     rgb: [5, 213, 255],
     secondaryRgb: [140, 245, 255],
-    skillName: '더블 점프 & 그라인드',
-    skillDesc: '공중 2단 점프 가능 및 베지어 곡선 착지 시 그라인드 가속 보너스',
   },
   treble: {
-    name: 'TREBLE FORM',
-    bandLabel: '4kHz ~ 20kHz (High)',
     colorHex: '#FFE600',
     rgb: [255, 230, 0],
     secondaryRgb: [255, 250, 160],
-    skillName: '블링크 대시 (Blink Dash)',
-    skillDesc: '중력을 무시하고 직선으로 장애물을 무적 관통하는 초고속 대시',
   },
 };
 
