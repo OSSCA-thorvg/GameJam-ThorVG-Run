@@ -13,6 +13,7 @@ import {
   type VectorParticle,
 } from '../types/game';
 import { BezierTerrain } from './BezierTerrain';
+import { PlayerController } from './PlayerController';
 
 const PLAYER_SCREEN_X_RATIO = 0.24;
 const ZOOM_THRESHOLD = 50.0;
@@ -24,6 +25,7 @@ const ZOOM_THRESHOLD = 50.0;
 export class GameEngine {
   private audio: AudioEngine;
   private terrain: BezierTerrain;
+  private playerController: PlayerController;
   private renderer: ThorVGRenderer | null = null;
   private onHudUpdate: (hud: HUDTelemetry) => void;
 
@@ -88,6 +90,7 @@ export class GameEngine {
   constructor(audio: AudioEngine, onHudUpdate: (hud: HUDTelemetry) => void) {
     this.audio = audio;
     this.terrain = new BezierTerrain();
+    this.playerController = new PlayerController();
     this.onHudUpdate = onHudUpdate;
   }
 
@@ -149,7 +152,8 @@ export class GameEngine {
     this.slamActive = false;
     this.invulnerableTimer = 0;
 
-    this.activeForm = 'synth';
+    this.playerController.reset('synth');
+    this.activeForm = this.playerController.form;
     this.divingTargetForm = 'bass';
     this.resonanceGauge = 40;
     this.microPolarity = -1;
@@ -191,12 +195,15 @@ export class GameEngine {
 
     if (this.phase !== 'MACRO') return;
 
-    const maxJumps = this.activeForm === 'synth' ? 2 : 1;
+    const profile = this.playerController.profile;
     if (this.isGrounded || this.jumpsRemaining > 0) {
       const isSecondJump = !this.isGrounded;
-      this.playerVy = isSecondJump ? -640 : -710;
+      this.playerVy = isSecondJump ? profile.secondJumpVelocity : profile.jumpVelocity;
       this.isGrounded = false;
-      this.jumpsRemaining = Math.max(0, (isSecondJump ? this.jumpsRemaining : maxJumps) - 1);
+      this.jumpsRemaining = Math.max(
+        0,
+        (isSecondJump ? this.jumpsRemaining : profile.maxJumps) - 1
+      );
       this.spawnBurst(
         this.width * PLAYER_SCREEN_X_RATIO,
         this.playerY + this.playerRadius,
@@ -207,8 +214,25 @@ export class GameEngine {
   }
 
   /**
+   * Allows manual or tactical Resonance Swap (1/2/3 or Q key) in addition to Micro View absorption.
+   */
+  public handleFormSwap(targetForm?: ResonanceFormType): void {
+    if (!this.running) return;
+    const nextForm = targetForm ?? this.playerController.cycleForm();
+    this.playerController.swapForm(nextForm);
+    this.activeForm = nextForm;
+    this.jumpsRemaining = this.playerController.profile.maxJumps;
+    const playerScreenX = this.width * PLAYER_SCREEN_X_RATIO;
+    this.spawnBurst(playerScreenX, this.playerY, FORM_CONFIG[nextForm].rgb, 18);
+    this.setBanner(
+      `🔄 RESONANCE SWAP: ${FORM_CONFIG[nextForm].name} (${FORM_CONFIG[nextForm].skillName})`,
+      1.6
+    );
+  }
+
+  /**
    * Secondary Action Input (Shift / Right Click / S / ArrowDown):
-   * - Bass Form: Airborne Slam -> Landing Shockwave that destroys forward Beat Traps
+   * - Bass Form: Airborne Slam or Ground Shockwave that destroys forward Beat Traps
    * - Synth Form: High-Speed Air Dash & Slope Boost
    * - Treble Form: Zero-Gravity Blink Dash piercing through obstacles invulnerably
    */
@@ -222,21 +246,31 @@ export class GameEngine {
 
     if (this.phase !== 'MACRO' || this.dashCooldown > 0) return;
 
-    if (this.activeForm === 'bass' && !this.isGrounded) {
-      // Bass Form: Slam down to trigger Shockwave on landing
-      this.playerVy = 1150;
-      this.slamActive = true;
-      this.dashCooldown = 0.45;
+    const profile = this.playerController.profile;
+    const playerScreenX = this.width * PLAYER_SCREEN_X_RATIO;
+    const playerWorldX = this.cameraX + playerScreenX;
+
+    if (this.activeForm === 'bass') {
+      if (!this.isGrounded) {
+        // Bass Form Airborne: High-velocity slam into Landing Shockwave
+        this.playerVy = 1200;
+        this.slamActive = true;
+        this.dashCooldown = profile.dashCooldownSec;
+      } else {
+        // Bass Form Grounded: Immediate Shockwave pulse
+        this.dashCooldown = profile.dashCooldownSec;
+        this.triggerBassShockwave(playerScreenX, this.playerY, playerWorldX);
+      }
       return;
     }
 
-    this.dashTimer = this.activeForm === 'treble' ? 0.28 : 0.22;
-    this.dashCooldown = this.activeForm === 'treble' ? 0.55 : 0.65;
+    this.dashTimer = profile.dashDurationSec;
+    this.dashCooldown = profile.dashCooldownSec;
     this.playerVy = 0;
 
-    if (this.activeForm === 'treble') {
+    if (profile.piercesTrapsDuringDash) {
       // Treble Form: Blink Dash grants temporary invulnerability to pierce Beat Traps
-      this.invulnerableTimer = Math.max(this.invulnerableTimer, 0.36);
+      this.invulnerableTimer = Math.max(this.invulnerableTimer, profile.dashDurationSec + 0.08);
       this.setBanner('⚡ TREBLE BLINK DASH — PIERCE ACTIVE', 0.9);
     }
   }
@@ -606,7 +640,8 @@ export class GameEngine {
       (lastGate && playerWorldX > lastGate.worldX + 180)
     ) {
       this.resonanceGauge = 100;
-      this.activeForm = this.divingTargetForm;
+      this.playerController.swapForm(this.divingTargetForm);
+      this.activeForm = this.playerController.form;
       this.divesCompleted++;
       this.phase = 'ZOOM_OUT';
       this.transitionTimer = 0;
