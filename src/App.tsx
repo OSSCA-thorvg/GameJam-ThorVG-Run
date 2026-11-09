@@ -34,6 +34,8 @@ const INITIAL_HUD: HUDTelemetry = {
   divesCompleted: 0,
 };
 
+type Screen = 'menu' | 'game';
+
 export const App: React.FC = () => {
   const { t } = useI18n();
   const [rendererMode, setRendererMode] = useState<RendererMode>('sw');
@@ -41,13 +43,19 @@ export const App: React.FC = () => {
   const [customTracks, setCustomTracks] = useState<TrackMetadata[]>([]);
   const [previewForm, setPreviewForm] = useState<ResonanceFormType>('synth');
   const [engineReady, setEngineReady] = useState<boolean>(false);
-  const [inGame, setInGame] = useState<boolean>(false);
+  /** Increments each time a renderer finishes init, so loops can restart on the new instance. */
+  const [rendererEpoch, setRendererEpoch] = useState<number>(0);
+  const [screen, setScreen] = useState<Screen>('menu');
+  const inGame = screen === 'game';
   const [hud, setHud] = useState<HUDTelemetry>(INITIAL_HUD);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<ThorVGRenderer | null>(null);
   const audioRef = useRef<AudioEngine | null>(null);
   const gameEngineRef = useRef<GameEngine | null>(null);
+  // Read inside loops without re-creating the WASM renderer.
+  const previewFormRef = useRef<ResonanceFormType>(previewForm);
+  previewFormRef.current = previewForm;
 
   if (!audioRef.current) {
     audioRef.current = new AudioEngine();
@@ -58,13 +66,13 @@ export const App: React.FC = () => {
     });
   }
 
-  // Initialize ThorVG WASM ('sw' SwCanvas or 'gl' GlCanvas) on fresh <canvas key={rendererMode} />
+  // Create the ThorVG renderer ('sw' SwCanvas or 'gl' GlCanvas) on a fresh
+  // <canvas key={rendererMode} />. Re-created ONLY when the renderer backend changes.
   useEffect(() => {
     const canvasEl = canvasRef.current;
     if (!canvasEl) return;
 
     let cancelled = false;
-    let previewRafId = 0;
     const renderer = new ThorVGRenderer(rendererMode);
     rendererRef.current = renderer;
     setEngineReady(false);
@@ -72,24 +80,15 @@ export const App: React.FC = () => {
     renderer
       .init(canvasEl, window.innerWidth, window.innerHeight)
       .then(() => {
-        if (cancelled) return;
-        setEngineReady(true);
+        if (cancelled || !renderer.ready) return;
         gameEngineRef.current?.attachRenderer(
           renderer,
           rendererMode,
           window.innerWidth,
           window.innerHeight
         );
-
-        if (!inGame) {
-          const start = performance.now();
-          const renderMenuLoop = (now: number) => {
-            if (cancelled || inGame) return;
-            renderer.renderPreviewFrame((now - start) / 1000, previewForm);
-            previewRafId = requestAnimationFrame(renderMenuLoop);
-          };
-          previewRafId = requestAnimationFrame(renderMenuLoop);
-        }
+        setEngineReady(true);
+        setRendererEpoch((n) => n + 1);
       })
       .catch((err) => {
         console.error('ThorVG WASM Renderer initialization error:', err);
@@ -97,13 +96,27 @@ export const App: React.FC = () => {
 
     return () => {
       cancelled = true;
-      cancelAnimationFrame(previewRafId);
       renderer.destroy();
       if (rendererRef.current === renderer) {
         rendererRef.current = null;
       }
     };
-  }, [rendererMode, inGame, previewForm]);
+  }, [rendererMode]);
+
+  // Menu preview loop. In 'game' the GameEngine owns the frame loop instead.
+  useEffect(() => {
+    const renderer = rendererRef.current;
+    if (screen !== 'menu' || !renderer?.ready) return;
+
+    let rafId = 0;
+    const start = performance.now();
+    const tick = (now: number) => {
+      renderer.renderPreviewFrame((now - start) / 1000, previewFormRef.current);
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [screen, rendererEpoch]);
 
   // Responsive viewport resize listener
   useEffect(() => {
@@ -142,7 +155,7 @@ export const App: React.FC = () => {
         gameEngineRef.current?.handleFormSwap();
       } else if (e.code === 'Escape') {
         gameEngineRef.current?.stopRun();
-        setInGame(false);
+        setScreen('menu');
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -162,13 +175,13 @@ export const App: React.FC = () => {
       rendererMode,
       activeForm: prev.activeForm,
     }));
-    setInGame(true);
+    setScreen('game');
     void gameEngineRef.current?.startRun(selectedTrack);
   }, [rendererMode, selectedTrack]);
 
   const handleReturnToMenu = useCallback(() => {
     gameEngineRef.current?.stopRun();
-    setInGame(false);
+    setScreen('menu');
   }, []);
 
   const handleSwitchRendererAndReplay = useCallback(
@@ -176,7 +189,7 @@ export const App: React.FC = () => {
       gameEngineRef.current?.stopRun();
       setRendererMode(nextMode);
       setTimeout(() => {
-        setInGame(true);
+        setScreen('game');
         void gameEngineRef.current?.startRun(selectedTrack);
       }, 120);
     },

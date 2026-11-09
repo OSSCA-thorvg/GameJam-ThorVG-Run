@@ -13,6 +13,18 @@ import {
 } from '../types/game';
 
 /**
+ * Serializes ThorVG.init()/term() across renderer instances. Each job starts only after
+ * the previous one settles; a failed job does not block later ones.
+ */
+let engineQueue: Promise<unknown> = Promise.resolve();
+
+function enqueueEngineJob<T>(job: () => Promise<T> | T): Promise<T> {
+  const run = engineQueue.then(job, job);
+  engineQueue = run.catch(() => undefined);
+  return run;
+}
+
+/**
  * ThorVG WebAssembly Vector Graphics Renderer Wrapper.
  * Strictly handles 2D vector drawing via @thorvg/webcanvas ('sw' SwCanvas or 'gl' GlCanvas).
  */
@@ -37,6 +49,14 @@ export class ThorVGRenderer {
   private playerCoreShape: TvgShape | null = null;
   private particlesShape: TvgShape | null = null;
 
+  /**
+   * Every WASM object this renderer creates. They are disposed explicitly before term():
+   * @thorvg/webcanvas frees GC'd objects through a FinalizationRegistry using whatever
+   * WASM module is *current*, so an undisposed object from a terminated module would
+   * later be freed on the next module's heap ("memory access out of bounds").
+   */
+  private ownedObjects: Array<{ dispose(): void }> = [];
+
   constructor(mode: RendererMode) {
     this.mode = mode;
   }
@@ -45,62 +65,76 @@ export class ThorVGRenderer {
     this.width = width;
     this.height = height;
 
-    // Ensure any previous singleton state in @thorvg/webcanvas is cleanly terminated
-    // so switching between 'sw' (CPU SwCanvas) and 'gl' (GPU GlCanvas) takes effect.
-    try {
-      const existingModule = (globalThis as Record<string, unknown>).__ThorVGModule;
-      if (existingModule && this.tvg) {
-        this.tvg.term();
+    // ThorVG.init()/term() mutate a single global WASM module. Running them through one
+    // queue guarantees a disposed renderer's term() can never land on top of a newer
+    // renderer's init() (React StrictMode double effects, rapid CPU <-> GPU switching).
+    await enqueueEngineJob(async () => {
+      if (this.disposed) return;
+
+      const TVG = await ThorVG.init({
+        renderer: this.mode,
+        locateFile: (path: string) => {
+          const filename = path.split('/').pop() || 'thorvg.wasm';
+          return wasmUrl.replace('thorvg.wasm', filename);
+        },
+      });
+
+      if (this.disposed) {
+        TVG.term();
+        return;
       }
-    } catch {
-      // Ignore if not previously initialized
-    }
 
-    const TVG = await ThorVG.init({
-      renderer: this.mode,
-      locateFile: (path: string) => {
-        const filename = path.split('/').pop() || 'thorvg.wasm';
-        return wasmUrl.replace('thorvg.wasm', filename);
-      },
+      this.tvg = TVG;
+      this.canvas = new TVG.Canvas(canvasElement, {
+        width,
+        height,
+        enableDevicePixelRatio: true,
+      });
+
+      // Initialize pooled shapes in painter's algorithm order
+      this.bgShape = new TVG.Shape();
+      this.gridShape = new TVG.Shape();
+      this.waveFillShape = new TVG.Shape();
+      this.waveGlowShape = new TVG.Shape();
+      this.waveCoreShape = new TVG.Shape();
+      this.trapsShape = new TVG.Shape();
+      this.portalsShape = new TVG.Shape();
+      this.effectsShape = new TVG.Shape();
+      this.playerGlowShape = new TVG.Shape();
+      this.playerCoreShape = new TVG.Shape();
+      this.particlesShape = new TVG.Shape();
+      this.ownedObjects.push(
+        this.bgShape,
+        this.gridShape,
+        this.waveFillShape,
+        this.waveGlowShape,
+        this.waveCoreShape,
+        this.trapsShape,
+        this.portalsShape,
+        this.effectsShape,
+        this.playerGlowShape,
+        this.playerCoreShape,
+        this.particlesShape
+      );
+
+      this.canvas
+        .add(this.bgShape)
+        .add(this.gridShape)
+        .add(this.waveFillShape)
+        .add(this.waveGlowShape)
+        .add(this.waveCoreShape)
+        .add(this.trapsShape)
+        .add(this.portalsShape)
+        .add(this.effectsShape)
+        .add(this.playerGlowShape)
+        .add(this.playerCoreShape)
+        .add(this.particlesShape);
     });
+  }
 
-    if (this.disposed) {
-      TVG.term();
-      return;
-    }
-
-    this.tvg = TVG;
-    this.canvas = new TVG.Canvas(canvasElement, {
-      width,
-      height,
-      enableDevicePixelRatio: true,
-    });
-
-    // Initialize pooled shapes in painter's algorithm order
-    this.bgShape = new TVG.Shape();
-    this.gridShape = new TVG.Shape();
-    this.waveFillShape = new TVG.Shape();
-    this.waveGlowShape = new TVG.Shape();
-    this.waveCoreShape = new TVG.Shape();
-    this.trapsShape = new TVG.Shape();
-    this.portalsShape = new TVG.Shape();
-    this.effectsShape = new TVG.Shape();
-    this.playerGlowShape = new TVG.Shape();
-    this.playerCoreShape = new TVG.Shape();
-    this.particlesShape = new TVG.Shape();
-
-    this.canvas
-      .add(this.bgShape)
-      .add(this.gridShape)
-      .add(this.waveFillShape)
-      .add(this.waveGlowShape)
-      .add(this.waveCoreShape)
-      .add(this.trapsShape)
-      .add(this.portalsShape)
-      .add(this.effectsShape)
-      .add(this.playerGlowShape)
-      .add(this.playerCoreShape)
-      .add(this.particlesShape);
+  /** True once init() has completed successfully and destroy() has not been called. */
+  public get ready(): boolean {
+    return !this.disposed && this.canvas !== null;
   }
 
   public get activeBackend(): string {
@@ -534,20 +568,39 @@ export class ThorVGRenderer {
     }
   }
 
+  /**
+   * Marks the renderer disposed immediately (all draw calls become no-ops) and
+   * releases WASM resources through the engine queue, after any pending init().
+   */
   public destroy(): void {
     if (this.disposed) return;
     this.disposed = true;
-    try {
-      this.canvas?.destroy();
-    } catch {
-      // Ignore canvas destroy errors during unmount
-    }
-    try {
-      this.tvg?.term();
-    } catch {
-      // Ignore term errors
-    }
-    this.canvas = null;
-    this.tvg = null;
+    void enqueueEngineJob(() => {
+      // Order matters (both steps must happen before term(), see `ownedObjects`):
+      // 1) Drop our references while the canvas and its WebGL context are still alive.
+      //    The main scene still holds each paint, so nothing is freed yet.
+      // 2) canvas.destroy() clears the scene, which frees the paints with a valid context.
+      //    Disposing after destroy() would free into a deleted GL context and throw.
+      for (const obj of this.ownedObjects) {
+        try {
+          obj.dispose();
+        } catch (err) {
+          console.warn('ThorVG object dispose failed:', err);
+        }
+      }
+      this.ownedObjects = [];
+      try {
+        this.canvas?.destroy();
+      } catch (err) {
+        console.warn('ThorVG canvas destroy failed:', err);
+      }
+      try {
+        this.tvg?.term();
+      } catch (err) {
+        console.warn('ThorVG term failed:', err);
+      }
+      this.canvas = null;
+      this.tvg = null;
+    });
   }
 }
