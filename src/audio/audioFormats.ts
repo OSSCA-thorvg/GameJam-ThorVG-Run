@@ -18,6 +18,7 @@ export interface AudioFormat {
 
 export const AUDIO_FORMATS: readonly AudioFormat[] = [
   { id: 'mp3', label: 'MP3', extensions: ['.mp3'], mimeTypes: ['audio/mpeg', 'audio/mp3'], probe: 'audio/mpeg' },
+  { id: 'mp4', label: 'MP4', extensions: ['.mp4'], mimeTypes: ['audio/mp4', 'video/mp4'], probe: 'audio/mp4; codecs="mp4a.40.2"' },
   { id: 'wav', label: 'WAV', extensions: ['.wav'], mimeTypes: ['audio/wav', 'audio/x-wav', 'audio/wave', 'audio/vnd.wave'], probe: 'audio/wav' },
   { id: 'aac', label: 'AAC/M4A', extensions: ['.m4a', '.aac'], mimeTypes: ['audio/mp4', 'audio/x-m4a', 'audio/aac'], probe: 'audio/mp4; codecs="mp4a.40.2"' },
   { id: 'flac', label: 'FLAC', extensions: ['.flac'], mimeTypes: ['audio/flac', 'audio/x-flac'], probe: 'audio/flac' },
@@ -89,3 +90,4 @@ export class AudioLoadError extends Error {
     this.code = code;
   }
 }
+

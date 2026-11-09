@@ -22,6 +22,7 @@ Uploaded files are decoded by your browser (`AudioContext.decodeAudioData`), so 
 | Format | Extensions | Chrome / Edge | Firefox | Safari |
 | :--- | :--- | :---: | :---: | :---: |
 | MP3 | `.mp3` | ✅ | ✅ | ✅ |
+| MP4 (audio / video) | `.mp4` | ✅ | ✅ (OS codec) | ✅ |
 | WAV | `.wav` | ✅ | ✅ | ✅ |
 | AAC | `.m4a`, `.aac` | ✅ | ✅ (OS codec) | ✅ |
 | FLAC | `.flac` | ✅ | ✅ | ✅ (recent) |
