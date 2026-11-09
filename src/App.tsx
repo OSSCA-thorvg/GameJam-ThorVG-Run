@@ -34,7 +34,7 @@ const INITIAL_HUD: HUDTelemetry = {
   divesCompleted: 0,
 };
 
-type Screen = 'menu' | 'game';
+type Screen = 'splash' | 'menu' | 'game';
 
 export const App: React.FC = () => {
   const { t } = useI18n();
@@ -45,7 +45,7 @@ export const App: React.FC = () => {
   const [engineReady, setEngineReady] = useState<boolean>(false);
   /** Increments each time a renderer finishes init, so loops can restart on the new instance. */
   const [rendererEpoch, setRendererEpoch] = useState<number>(0);
-  const [screen, setScreen] = useState<Screen>('menu');
+  const [screen, setScreen] = useState<Screen>('splash');
   const inGame = screen === 'game';
   const [hud, setHud] = useState<HUDTelemetry>(INITIAL_HUD);
 
@@ -56,6 +56,8 @@ export const App: React.FC = () => {
   // Read inside loops without re-creating the WASM renderer.
   const previewFormRef = useRef<ResonanceFormType>(previewForm);
   previewFormRef.current = previewForm;
+  // The splash plays once per page load, even if the renderer is re-created later.
+  const splashStartedRef = useRef<boolean>(false);
 
   if (!audioRef.current) {
     audioRef.current = new AudioEngine();
@@ -89,9 +91,19 @@ export const App: React.FC = () => {
         );
         setEngineReady(true);
         setRendererEpoch((n) => n + 1);
+
+        if (!splashStartedRef.current) {
+          splashStartedRef.current = true;
+          void renderer.playSplash().then(() => {
+            setScreen((current) => (current === 'splash' ? 'menu' : current));
+          });
+        }
       })
       .catch((err) => {
         console.error('ThorVG WASM Renderer initialization error:', err);
+        // Without a renderer there is nothing to play; go straight to the menu.
+        splashStartedRef.current = true;
+        setScreen((current) => (current === 'splash' ? 'menu' : current));
       });
 
     return () => {
@@ -221,7 +233,7 @@ export const App: React.FC = () => {
         className="tvg-canvas"
       />
 
-      {!inGame && (
+      {screen === 'menu' && (
         <StartScreen
           selectedTrack={selectedTrack}
           customTracks={customTracks}

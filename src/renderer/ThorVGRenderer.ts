@@ -1,9 +1,12 @@
 import ThorVG, {
   type ThorVGNamespace,
+  type Animation as TvgAnimation,
+  type AnimationInfo,
   type Canvas as TvgCanvas,
   type Shape as TvgShape,
 } from '@thorvg/webcanvas';
 import wasmUrl from '@thorvg/webcanvas/dist/thorvg.wasm?url';
+import splashLottie from '../logo/powred.by.thorvg.1.json?raw';
 import {
   FORM_CONFIG,
   type BeatTrap,
@@ -56,6 +59,11 @@ export class ThorVGRenderer {
    * later be freed on the next module's heap ("memory access out of bounds").
    */
   private ownedObjects: Array<{ dispose(): void }> = [];
+
+  // Startup splash ("Powered by ThorVG" Lottie). Kept hidden after it finishes.
+  private splashAnim: TvgAnimation | null = null;
+  private splashInfo: AnimationInfo | null = null;
+  private splashActive: boolean = false;
 
   constructor(mode: RendererMode) {
     this.mode = mode;
@@ -129,6 +137,114 @@ export class ThorVGRenderer {
         .add(this.playerGlowShape)
         .add(this.playerCoreShape)
         .add(this.particlesShape);
+
+      // Added last so it draws above everything while active.
+      this.loadSplash(TVG);
+    });
+  }
+
+  /** Loads the splash Lottie. On failure the splash is skipped (playSplash resolves at once). */
+  private loadSplash(TVG: ThorVGNamespace): void {
+    try {
+      const anim = new TVG.Animation();
+      this.ownedObjects.push(anim);
+      anim.load(splashLottie);
+      const info = anim.info();
+      const picture = anim.picture;
+      if (!info || info.totalFrames <= 0 || !picture) {
+        throw new Error('splash Lottie has no frames');
+      }
+      picture.visible(false);
+      this.canvas!.add(picture);
+      this.splashAnim = anim;
+      this.splashInfo = info;
+    } catch (err) {
+      console.warn('Splash Lottie unavailable, skipping splash:', err);
+      this.splashAnim = null;
+      this.splashInfo = null;
+    }
+  }
+
+  /** Fits the 16:9 splash into the viewport (contain) and centers it. */
+  private layoutSplash(): void {
+    const picture = this.splashAnim?.picture;
+    if (!picture) return;
+    const srcW = 1920;
+    const srcH = 1080;
+    const scale = Math.min(this.width / srcW, this.height / srcH);
+    picture.size(srcW * scale, srcH * scale);
+    picture.translate((this.width - srcW * scale) / 2, (this.height - srcH * scale) / 2);
+  }
+
+  /** Clears every gameplay layer, leaving a black background that matches the splash Lottie. */
+  private clearGameplayLayers(): void {
+    this.bgShape!.reset().appendRect(0, 0, this.width, this.height).fill(0, 0, 0, 255);
+    for (const shape of [
+      this.gridShape,
+      this.waveFillShape,
+      this.waveGlowShape,
+      this.waveCoreShape,
+      this.trapsShape,
+      this.portalsShape,
+      this.effectsShape,
+      this.playerGlowShape,
+      this.playerCoreShape,
+      this.particlesShape,
+    ]) {
+      shape!.reset();
+    }
+  }
+
+  /**
+   * Plays the splash Lottie once from the first to the last frame, then hides it.
+   * Frames are driven manually from elapsed time so completion is deterministic.
+   * Resolves immediately if the splash failed to load, and is guarded by a safety
+   * timeout (duration + 1.5s) in case frames stop arriving.
+   */
+  public playSplash(): Promise<void> {
+    const anim = this.splashAnim;
+    const info = this.splashInfo;
+    const picture = anim?.picture;
+    if (!this.ready || !anim || !info || !picture) return Promise.resolve();
+
+    return new Promise<void>((resolve) => {
+      let rafId = 0;
+      let finished = false;
+      const lastFrame = Math.max(0, info.totalFrames - 1);
+      const durationSec = lastFrame / info.fps;
+
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        cancelAnimationFrame(rafId);
+        clearTimeout(safetyTimer);
+        this.splashActive = false;
+        if (!this.disposed) picture.visible(false);
+        resolve();
+      };
+      const safetyTimer = setTimeout(finish, (durationSec + 1.5) * 1000);
+
+      this.splashActive = true;
+      this.clearGameplayLayers();
+      this.layoutSplash();
+      picture.visible(true);
+
+      const start = performance.now();
+      const tick = (now: number) => {
+        if (this.disposed || !this.canvas) {
+          finish();
+          return;
+        }
+        const elapsedSec = (now - start) / 1000;
+        anim.frame(Math.min(lastFrame, elapsedSec * info.fps));
+        this.canvas.update().render();
+        if (elapsedSec >= durationSec) {
+          finish();
+          return;
+        }
+        rafId = requestAnimationFrame(tick);
+      };
+      rafId = requestAnimationFrame(tick);
     });
   }
 
@@ -146,6 +262,10 @@ export class ThorVGRenderer {
     this.height = height;
     if (this.canvas && !this.disposed) {
       this.canvas.resize(width, height);
+      if (this.splashActive) {
+        this.clearGameplayLayers();
+        this.layoutSplash();
+      }
     }
   }
 
