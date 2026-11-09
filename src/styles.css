@@ -512,9 +512,15 @@ body,
 
 .hud-center-banner {
   position: absolute;
-  top: 118px;
+  /* Just above the bottom HUD: clear of the top HUD panels and of the Micro View lanes. */
+  bottom: 140px;
   left: 50%;
   transform: translateX(-50%);
+  /* Keep messages on one line instead of breaking mid-token (e.g. "+A ↔ -A"). */
+  white-space: nowrap;
+  max-width: calc(100vw - 48px);
+  overflow: hidden;
+  text-overflow: ellipsis;
   background: rgba(8, 12, 26, 0.88);
   border: 1.5px solid #05d5ff;
   padding: 8px 20px;
