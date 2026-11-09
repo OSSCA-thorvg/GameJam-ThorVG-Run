@@ -117,6 +117,8 @@ export interface RenderFrameState {
   isDashing: boolean;
   isGrinding: boolean;
   invulnerableTimer: number;
+  /** Seconds of run-cycle animation; advances only while running on ground/rails, scaled by speed. */
+  runCycleTime: number;
   shockwaves: ShockwaveEffect[];
   afterimages: AfterimageTrail[];
   particles: VectorParticle[];

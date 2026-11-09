@@ -65,6 +65,8 @@ export class GameEngine {
   private isGrinding: boolean = false;
   private slamActive: boolean = false;
   private invulnerableTimer: number = 0;
+  /** Drives the character run-cycle animation (visual only, no effect on physics). */
+  private runCycleTime: number = 0;
 
   // Resonance Swap & Micro View State
   private activeForm: ResonanceFormType = 'synth';
@@ -152,6 +154,7 @@ export class GameEngine {
     this.isGrinding = false;
     this.slamActive = false;
     this.invulnerableTimer = 0;
+    this.runCycleTime = 0;
 
     this.playerController.reset('synth');
     this.activeForm = this.playerController.form;
@@ -315,6 +318,9 @@ export class GameEngine {
     }
 
     const stepX = this.baseSpeed * speedMultiplier * dt;
+    if ((this.phase === 'MACRO' && this.isGrounded) || this.phase === 'MICRO') {
+      this.runCycleTime += dt * speedMultiplier;
+    }
     this.cameraX += stepX;
     const playerWorldX = this.cameraX + playerScreenX;
 
@@ -360,6 +366,7 @@ export class GameEngine {
       isDashing: this.dashTimer > 0,
       isGrinding: this.isGrinding,
       invulnerableTimer: this.invulnerableTimer,
+      runCycleTime: this.runCycleTime,
       shockwaves: this.shockwaves,
       afterimages: this.afterimages,
       particles: this.particles,

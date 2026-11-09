@@ -7,6 +7,8 @@ import ThorVG, {
 } from '@thorvg/webcanvas';
 import wasmUrl from '@thorvg/webcanvas/dist/thorvg.wasm?url';
 import splashLottie from '../logo/powred.by.thorvg.1.json?raw';
+import crewmateLottie from '../asset/Loading 50 _ Among Us.json?raw';
+import { buildCharacterMatrix } from './characterMatrix';
 import {
   FORM_CONFIG,
   type BeatTrap,
@@ -26,6 +28,24 @@ function enqueueEngineJob<T>(job: () => Promise<T> | T): Promise<T> {
   engineQueue = run.catch(() => undefined);
   return run;
 }
+
+interface ContentBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** The crewmate Lottie composition is 500x500. */
+const CREW_SOURCE_SIZE = 500;
+/** Visible crewmate height relative to the physics radius (collision circle diameter = 2.0). */
+const CREW_HEIGHT_RATIO = 2.6;
+/**
+ * Visible crewmate area inside the 500x500 composition: the union of non-transparent pixels
+ * over all 27 frames, measured by rendering each frame with ThorVG SwCanvas. (Picture.bounds()
+ * cannot be used: it reports the whole 500x500 picture box, not the drawn content.)
+ */
+const CREW_BOX: ContentBox = { x: 181, y: 169, width: 145, height: 192 };
 
 /**
  * ThorVG WebAssembly Vector Graphics Renderer Wrapper.
@@ -64,6 +84,10 @@ export class ThorVGRenderer {
   private splashAnim: TvgAnimation | null = null;
   private splashInfo: AnimationInfo | null = null;
   private splashActive: boolean = false;
+
+  // Main character: Among Us crewmate run-cycle Lottie (falls back to the form polygon).
+  private crewAnim: TvgAnimation | null = null;
+  private crewInfo: AnimationInfo | null = null;
 
   constructor(mode: RendererMode) {
     this.mode = mode;
@@ -135,8 +159,11 @@ export class ThorVGRenderer {
         .add(this.portalsShape)
         .add(this.effectsShape)
         .add(this.playerGlowShape)
-        .add(this.playerCoreShape)
-        .add(this.particlesShape);
+        .add(this.playerCoreShape);
+
+      // Character draws above its aura and below particles.
+      this.loadCrewmate(TVG);
+      this.canvas.add(this.particlesShape);
 
       // Added last so it draws above everything while active.
       this.loadSplash(TVG);
@@ -163,6 +190,63 @@ export class ThorVGRenderer {
       this.splashAnim = null;
       this.splashInfo = null;
     }
+  }
+
+  /** Loads the crewmate Lottie. On failure the polygon character is used. */
+  private loadCrewmate(TVG: ThorVGNamespace): void {
+    try {
+      const anim = new TVG.Animation();
+      this.ownedObjects.push(anim);
+      anim.load(crewmateLottie);
+      const info = anim.info();
+      const picture = anim.picture;
+      if (!info || info.totalFrames <= 0 || !picture) {
+        throw new Error('crewmate Lottie has no frames');
+      }
+      picture.size(CREW_SOURCE_SIZE, CREW_SOURCE_SIZE);
+      picture.visible(false);
+      this.canvas!.add(picture);
+      this.crewAnim = anim;
+      this.crewInfo = info;
+    } catch (err) {
+      console.warn('Crewmate Lottie unavailable, using polygon character:', err);
+      this.crewAnim = null;
+      this.crewInfo = null;
+    }
+  }
+
+  /**
+   * Draws the crewmate centered at (cx, cy) with total visible height `height`.
+   * `flip = -1` mirrors it vertically (running upside down on the Micro View ceiling).
+   */
+  private drawCrewmate(
+    cx: number,
+    cy: number,
+    height: number,
+    rotation: number,
+    flip: 1 | -1,
+    runCycleTime: number,
+    alpha: number
+  ): void {
+    const anim = this.crewAnim;
+    const info = this.crewInfo;
+    const picture = anim?.picture;
+    if (!anim || !info || !picture) return;
+
+    const k = height / CREW_BOX.height;
+    picture.size(CREW_SOURCE_SIZE * k, CREW_SOURCE_SIZE * k);
+    const frame = (runCycleTime * info.fps) % info.totalFrames;
+    anim.frame(frame);
+
+    const pivotX = (CREW_BOX.x + CREW_BOX.width / 2) * k;
+    const pivotY = (CREW_BOX.y + CREW_BOX.height / 2) * k;
+    picture.transform(buildCharacterMatrix(cx, cy, pivotX, pivotY, rotation, flip));
+    picture.opacity(Math.max(0, Math.min(255, Math.round(alpha))));
+    picture.visible(true);
+  }
+
+  private hideCrewmate(): void {
+    this.crewAnim?.picture?.visible(false);
   }
 
   /** Fits the 16:9 splash into the viewport (contain) and centers it. */
@@ -193,6 +277,7 @@ export class ThorVGRenderer {
     ]) {
       shape!.reset();
     }
+    this.hideCrewmate();
   }
 
   /**
@@ -334,7 +419,12 @@ export class ThorVGRenderer {
     // 4. Preview Resonance Polygon Character
     const playerX = width * 0.25;
     const playerY = baseFloorY - 48 + Math.sin(timeSec * 4.5) * 14;
-    this.drawPlayerPolygon(playerX, playerY, 26, timeSec * 1.2, previewForm, 1.0);
+    if (this.crewAnim) {
+      this.drawPlayerPolygon(playerX, playerY, 26, timeSec * 1.2, previewForm, 1.0, true);
+      this.drawCrewmate(playerX, playerY - 26 * 0.3, 26 * CREW_HEIGHT_RATIO, 0, 1, timeSec, 255);
+    } else {
+      this.drawPlayerPolygon(playerX, playerY, 26, timeSec * 1.2, previewForm, 1.0);
+    }
 
     this.canvas.update().render();
   }
@@ -416,15 +506,33 @@ export class ThorVGRenderer {
       this.effectsShape!.stroke({ width: 3, color: [fr, fg, fb, 190] });
     }
 
-    // 4. Render Player Character Polygon (Bass Hexagon / Synth Diamond / Treble Arrowhead)
-    this.drawPlayerPolygon(
-      tx(state.playerScreenX),
-      ty(state.playerScreenY),
-      ts(state.playerRadius),
-      state.playerRotation,
-      activeForm,
-      state.invulnerableTimer > 0 ? 0.55 : 1.0
-    );
+    // 4. Player: Among Us crewmate over a form-colored aura (polygon character as fallback).
+    const isInvulnerable = state.invulnerableTimer > 0;
+    const px = tx(state.playerScreenX);
+    const py = ty(state.playerScreenY);
+    const pr = ts(state.playerRadius);
+    if (this.crewAnim) {
+      const height = pr * CREW_HEIGHT_RATIO;
+      const cx = px;
+      let cy: number;
+      let rotation = 0;
+      let flip: 1 | -1 = 1;
+      if (phase === 'MICRO') {
+        // Phase Invert: feet on the active rail, body toward the tunnel center.
+        flip = state.microPolarity === -1 ? -1 : 1;
+        cy = py + (flip === -1 ? height / 2 : -height / 2);
+      } else {
+        // Feet rest on the engine's landing line (playerY + playerRadius).
+        rotation = state.playerRotation;
+        cy = py + pr - height / 2;
+      }
+      // Aura is centered on the drawn character (in Micro View it is offset from the rail).
+      this.drawPlayerPolygon(cx, cy, pr, rotation, activeForm, isInvulnerable ? 0.55 : 1.0, true);
+      const blink = isInvulnerable && Math.floor(state.timeSec * 12) % 2 === 0;
+      this.drawCrewmate(cx, cy, height, rotation, flip, state.runCycleTime, blink ? 90 : 255);
+    } else {
+      this.drawPlayerPolygon(px, py, pr, state.playerRotation, activeForm, isInvulnerable ? 0.55 : 1.0);
+    }
 
     // 5. Render Vector Particles
     this.particlesShape!.reset();
@@ -610,19 +718,32 @@ export class ThorVGRenderer {
     }
   }
 
+  /**
+   * Draws the form polygon. With `auraOnly`, only a larger translucent glow is drawn
+   * (used behind the crewmate so the active resonance form stays readable).
+   */
   private drawPlayerPolygon(
     cx: number,
     cy: number,
     radius: number,
     rotation: number,
     form: ResonanceFormType,
-    alphaRatio: number
+    alphaRatio: number,
+    auraOnly: boolean = false
   ): void {
     const [r, g, b] = FORM_CONFIG[form].rgb;
     const alpha = Math.floor(255 * alphaRatio);
 
     this.playerGlowShape!.reset();
     this.playerCoreShape!.reset();
+
+    if (auraOnly) {
+      this.appendPolygonPath(this.playerGlowShape!, cx, cy, radius * 1.45, rotation, form);
+      this.playerGlowShape!
+        .fill(r, g, b, Math.floor(70 * alphaRatio))
+        .stroke({ width: 2, color: [r, g, b, Math.floor(200 * alphaRatio)] });
+      return;
+    }
 
     this.appendPolygonPath(this.playerGlowShape!, cx, cy, radius * 1.28, rotation, form);
     this.playerGlowShape!.fill(r, g, b, Math.floor(90 * alphaRatio));
