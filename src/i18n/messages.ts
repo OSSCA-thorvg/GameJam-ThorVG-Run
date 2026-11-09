@@ -27,7 +27,7 @@ export const en = {
     github: 'GitHub Repository ↗',
     language: 'Language',
     trackSection: '1. Select Track',
-    builtInTrack: 'Sample Track {index}: {title}',
+    builtInTrack: 'Default Track: {title}',
     customTrack: 'Custom Track: {title}',
     trackMeta: '{artist} · {seconds}s',
     selected: 'SELECTED',
@@ -49,7 +49,8 @@ export const en = {
     },
   },
   upload: {
-    dropzone: '📂 Upload audio from your PC (click or drag & drop)',
+    dropzone: '➕ Add more music from your PC (click or drag & drop .mp3 / .mp4 files)',
+    addMoreGuide: 'Default track (Mens Tear - AK47) is pre-loaded. Upload additional tracks anytime to add them to the list above.',
     supported: 'Supported in this browser: {list}',
     noneSupported: 'This browser did not report any supported audio formats.',
     limits: 'Max {maxMb} MB · Min {minSeconds} seconds',
@@ -64,8 +65,8 @@ export const en = {
     },
   },
   tracks: {
-    'cyber-pulse': 'Cyber Pulse (128 BPM)',
-    'subatomic-rush': 'Subatomic Rush (140 BPM)',
+    'mens-tear-ak47': 'Mens Tear - AK47',
+    defaultArtist: 'Mens Tear · Default Track',
     customArtist: 'Local Audio',
   },
   forms: {
@@ -156,8 +157,8 @@ export const ko: Messages = {
     github: 'GitHub 저장소 ↗',
     language: '언어',
     trackSection: '1. 음원 선택',
-    builtInTrack: '기본 샘플 트랙 {index}: {title}',
-    customTrack: '커스텀 트랙: {title}',
+    builtInTrack: '기본 음원: {title}',
+    customTrack: '추가 음원: {title}',
     trackMeta: '{artist} · {seconds}초',
     selected: '선택됨',
     rendererSection: '2. ThorVG 렌더러 엔진 선택',
@@ -178,7 +179,8 @@ export const ko: Messages = {
     },
   },
   upload: {
-    dropzone: '📂 내 PC 음원 업로드 (클릭 또는 드래그 앤 드롭)',
+    dropzone: '➕ 추가 음원 업로드 (클릭하거나 .mp3 / .mp4 등 음원 파일을 드래그하여 추가)',
+    addMoreGuide: '기본 음원(맨스티어_AK47)이 기본 세팅되어 있습니다. 원하는 곡을 추가로 업로드하면 위 목록에 바로 등록됩니다.',
     supported: '이 브라우저 지원 형식: {list}',
     noneSupported: '이 브라우저에서 지원하는 오디오 형식을 찾지 못했습니다.',
     limits: '최대 {maxMb}MB · 최소 {minSeconds}초',
@@ -193,9 +195,9 @@ export const ko: Messages = {
     },
   },
   tracks: {
-    'cyber-pulse': 'Cyber Pulse (128 BPM)',
-    'subatomic-rush': 'Subatomic Rush (140 BPM)',
-    customArtist: '내 PC 음원',
+    'mens-tear-ak47': '맨스티어_AK47',
+    defaultArtist: '맨스티어 · 기본 제공 음원',
+    customArtist: '내 PC 추가 음원',
   },
   forms: {
     bass: {
@@ -285,3 +287,4 @@ export function formatMessage(template: string, params: MessageParams = {}): str
     Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match
   );
 }
+

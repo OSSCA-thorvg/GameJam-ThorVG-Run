@@ -13,10 +13,14 @@ export function resolveBanner(t: Messages, banner: BannerMessage): string {
   });
 }
 
-type BuiltInTrackId = Exclude<keyof Messages['tracks'], 'customArtist'>;
+type BuiltInTrackId = Exclude<keyof Messages['tracks'], 'defaultArtist' | 'customArtist'>;
 
 function isBuiltInTrackId(t: Messages, id: string): id is BuiltInTrackId {
-  return id !== 'customArtist' && Object.prototype.hasOwnProperty.call(t.tracks, id);
+  return (
+    id !== 'defaultArtist' &&
+    id !== 'customArtist' &&
+    Object.prototype.hasOwnProperty.call(t.tracks, id)
+  );
 }
 
 /** Built-in tracks use the localized dictionary name; custom tracks keep their file name. */
@@ -28,5 +32,6 @@ export function trackTitle(t: Messages, track: TrackMetadata): string {
 }
 
 export function trackArtist(t: Messages, track: TrackMetadata): string {
-  return track.isCustom ? t.tracks.customArtist : track.artist;
+  return track.isCustom ? t.tracks.customArtist : t.tracks.defaultArtist;
 }
+

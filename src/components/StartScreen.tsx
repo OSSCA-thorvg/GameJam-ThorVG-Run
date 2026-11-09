@@ -172,6 +172,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
               }}
             />
             <span>{t.upload.dropzone}</span>
+            <small className="upload-formats">{t.upload.addMoreGuide}</small>
             <small className="upload-formats">
               {supportedFormats.length > 0
                 ? format(t.upload.supported, { list: supportedList })

@@ -73,6 +73,18 @@ export class AudioEngine {
         ...track,
         durationSec: Math.max(1, Math.round(decoded.duration)),
       };
+    } else if (track.assetUrl) {
+      let decoded = this.decodedUploads.get(track.id);
+      if (!decoded) {
+        const res = await fetch(track.assetUrl);
+        decoded = await ctx.decodeAudioData(await res.arrayBuffer());
+        this.decodedUploads.set(track.id, decoded);
+      }
+      this.currentBuffer = decoded;
+      this.currentTrack = {
+        ...track,
+        durationSec: Math.max(1, Math.round(decoded.duration)),
+      };
     } else {
       this.currentBuffer = synthesizeTrackBuffer(ctx, track);
       this.currentTrack = track;

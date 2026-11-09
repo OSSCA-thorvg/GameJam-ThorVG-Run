@@ -1,21 +1,15 @@
+import defaultTrackUrl from '../asset/music/맨스티어_AK47.mp3?url';
 import type { TrackMetadata } from '../types/game';
 
 export const BUILT_IN_TRACKS: TrackMetadata[] = [
   {
-    id: 'cyber-pulse',
-    title: 'Cyber Pulse (128 BPM)',
-    artist: 'ThorVG Synth Engine',
+    id: 'mens-tear-ak47',
+    title: 'Mens Tear - AK47',
+    artist: 'Mens Tear',
     bpm: 128,
-    durationSec: 45,
+    durationSec: 167,
     isCustom: false,
-  },
-  {
-    id: 'subatomic-rush',
-    title: 'Subatomic Rush (140 BPM)',
-    artist: 'ThorVG Resonance Lab',
-    bpm: 140,
-    durationSec: 45,
-    isCustom: false,
+    assetUrl: defaultTrackUrl,
   },
 ];
 

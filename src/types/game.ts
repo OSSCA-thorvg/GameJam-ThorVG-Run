@@ -22,6 +22,7 @@ export interface TrackMetadata {
   durationSec: number;
   isCustom?: boolean;
   file?: File;
+  assetUrl?: string;
 }
 
 export interface BezierSegment {
