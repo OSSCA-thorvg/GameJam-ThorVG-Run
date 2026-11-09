@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AudioEngine } from './audio/AudioEngine';
+import type { AudioFormat } from './audio/audioFormats';
 import { BUILT_IN_TRACKS } from './audio/proceduralTracks';
 import { InGameHUD } from './components/InGameHUD';
 import { ResultModal } from './components/ResultModal';
@@ -148,9 +149,9 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [inGame]);
 
-  const handleUploadFile = useCallback(async (file: File) => {
+  const handleUploadFile = useCallback(async (file: File, supportedFormats: readonly AudioFormat[]) => {
     if (!audioRef.current) return;
-    const decodedTrack = await audioRef.current.decodeLocalFile(file);
+    const decodedTrack = await audioRef.current.decodeLocalFile(file, supportedFormats);
     setCustomTracks((prev) => [decodedTrack, ...prev]);
     setSelectedTrack(decodedTrack);
   }, []);

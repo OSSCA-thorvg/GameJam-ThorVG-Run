@@ -1,4 +1,12 @@
 import type { AcousticZoomMode, FrequencyBands, TrackMetadata } from '../types/game';
+import {
+  AudioLoadError,
+  MAX_UPLOAD_BYTES,
+  MIN_TRACK_SECONDS,
+  matchAudioFormat,
+  stripAudioExtension,
+  type AudioFormat,
+} from './audioFormats';
 import { BUILT_IN_TRACKS, synthesizeTrackBuffer } from './proceduralTracks';
 
 /**
@@ -13,6 +21,8 @@ export class AudioEngine {
   private gainNode: GainNode | null = null;
   private currentBuffer: AudioBuffer | null = null;
   private currentTrack: TrackMetadata = BUILT_IN_TRACKS[0]!;
+  /** Decoded uploads keyed by track id, so starting a run does not decode the file twice. */
+  private decodedUploads: Map<string, AudioBuffer> = new Map();
 
   private fftBytes: Uint8Array<ArrayBuffer> = new Uint8Array(new ArrayBuffer(1024));
   private isPlaying: boolean = false;
@@ -53,8 +63,11 @@ export class AudioEngine {
     this.stop();
 
     if (track.isCustom && track.file) {
-      const arrayBuf = await track.file.arrayBuffer();
-      const decoded = await ctx.decodeAudioData(arrayBuf);
+      let decoded = this.decodedUploads.get(track.id);
+      if (!decoded) {
+        decoded = await ctx.decodeAudioData(await track.file.arrayBuffer());
+        this.decodedUploads.set(track.id, decoded);
+      }
       this.currentBuffer = decoded;
       this.currentTrack = {
         ...track,
@@ -69,18 +82,45 @@ export class AudioEngine {
     return this.currentTrack;
   }
 
-  public async decodeLocalFile(file: File): Promise<TrackMetadata> {
-    const cleanName = file.name.replace(/\.(mp3|ogg|wav)$/i, '');
-    const customTrack: TrackMetadata = {
-      id: `custom-${Date.now()}`,
-      title: cleanName,
-      artist: 'Local UGC Audio',
+  /**
+   * Validates and decodes a user-uploaded file without touching the current track.
+   * Order: size -> format -> decode -> duration. Throws `AudioLoadError` on failure,
+   * leaving `currentBuffer` / `currentTrack` unchanged.
+   */
+  public async decodeLocalFile(
+    file: File,
+    supportedFormats: readonly AudioFormat[]
+  ): Promise<TrackMetadata> {
+    if (file.size > MAX_UPLOAD_BYTES) {
+      throw new AudioLoadError('too_large');
+    }
+    if (!matchAudioFormat(file, supportedFormats)) {
+      throw new AudioLoadError('unsupported');
+    }
+
+    const ctx = this.ensureContext();
+    let decoded: AudioBuffer;
+    try {
+      decoded = await ctx.decodeAudioData(await file.arrayBuffer());
+    } catch (err) {
+      throw new AudioLoadError('decode_failed', err instanceof Error ? err.message : undefined);
+    }
+
+    if (!Number.isFinite(decoded.duration) || decoded.duration < MIN_TRACK_SECONDS) {
+      throw new AudioLoadError('too_short');
+    }
+
+    const id = `custom-${Date.now()}`;
+    this.decodedUploads.set(id, decoded);
+    return {
+      id,
+      title: stripAudioExtension(file.name),
+      artist: '',
       bpm: 128,
-      durationSec: 60,
+      durationSec: Math.max(1, Math.round(decoded.duration)),
       isCustom: true,
       file,
     };
-    return this.loadTrack(customTrack);
   }
 
   public async startPlayback(): Promise<void> {

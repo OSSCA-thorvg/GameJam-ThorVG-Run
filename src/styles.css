@@ -723,3 +723,8 @@ body,
   background: rgba(5, 213, 255, 0.22);
   color: #ffffff;
 }
+
+.upload-formats {
+  color: #8ba3cc;
+  font-size: 11px;
+}
