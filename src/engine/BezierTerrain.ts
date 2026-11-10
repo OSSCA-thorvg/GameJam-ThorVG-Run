@@ -1,53 +1,168 @@
+import { REFERENCE_HEIGHT, SEGMENT_WIDTH } from '../audio/TrackAnalyzer';
 import type {
   BeatTrap,
   BezierSegment,
   DivingNode,
   FrequencyBands,
   ResonanceFormType,
+  ResonanceOrb,
+  SectionIntensity,
+  TrackBlueprint,
 } from '../types/game';
 import { evaluateBezierFloor } from './bezierMath';
 
-const SEGMENT_WIDTH = 220;
 const FORMS_ORDER: ResonanceFormType[] = ['bass', 'synth', 'treble'];
 
 export type RuntimeTrap = BeatTrap & { screenFloorY?: number };
 
 /**
- * Generates and streams 2D Cubic Bezier waveform terrain, Beat Traps, and Frequency Diving Nodes
- * driven by real-time Web Audio API FFT energy.
+ * Streams pre-computed 2D Cubic Bezier waveform terrain, Rhythm Resonance Orbs,
+ * Beat Traps, and Frequency Diving Nodes from a TrackBlueprint, with resolution
+ * scaling and subtle live harmonic breathing.
  */
 export class BezierTerrain {
-  private segments: BezierSegment[] = [];
-  private baseHeights: Map<number, { y0: number; cy1: number; cy2: number; y1: number }> = new Map();
-  private traps: Array<BeatTrap & { screenFloorY?: number }> = [];
-  private divingNodes: DivingNode[] = [];
+  private allSegments: BezierSegment[] = [];
+  private baseSegments: BezierSegment[] = [];
+  private visibleSegments: BezierSegment[] = [];
 
-  private nextSegmentX: number = -200;
-  private segmentIndex: number = 0;
-  private lastAnchorY: number = 480;
-  private lastSlopeY: number = 0;
-  private nextId: number = 1;
-  private viewportHeight: number = 720;
+  private allOrbs: ResonanceOrb[] = [];
+  private baseOrbY: Map<number, number> = new Map();
+  private visibleOrbs: ResonanceOrb[] = [];
 
-  public reset(viewportWidth: number, viewportHeight: number): void {
+  private allTraps: RuntimeTrap[] = [];
+  private visibleTraps: RuntimeTrap[] = [];
+
+  private allDivingNodes: DivingNode[] = [];
+  private basePortalY: Map<number, number> = new Map();
+  private visibleDivingNodes: DivingNode[] = [];
+
+  private viewportHeight: number = REFERENCE_HEIGHT;
+  private refHeight: number = REFERENCE_HEIGHT;
+  private segWidth: number = SEGMENT_WIDTH;
+  private hasBlueprint: boolean = false;
+
+  /**
+   * Loads a pre-computed TrackBlueprint before the run starts.
+   * Clones mutable gameplay entities so replays start fresh without re-analyzing PCM.
+   */
+  public loadBlueprint(
+    blueprint: TrackBlueprint,
+    viewportWidth: number,
+    viewportHeight: number
+  ): void {
     this.viewportHeight = viewportHeight;
-    this.segments = [];
-    this.baseHeights.clear();
-    this.traps = [];
-    this.divingNodes = [];
-    this.nextSegmentX = -SEGMENT_WIDTH;
-    this.segmentIndex = 0;
-    this.lastAnchorY = viewportHeight * 0.68;
-    this.lastSlopeY = 0;
-    this.nextId = 1;
+    this.refHeight = blueprint.referenceHeight || REFERENCE_HEIGHT;
+    this.segWidth = blueprint.segmentWidth || SEGMENT_WIDTH;
+    this.hasBlueprint = true;
 
-    this.ensureSegments(0, viewportWidth, {
+    const scaleY = viewportHeight / this.refHeight;
+
+    this.baseSegments = blueprint.segments.map((s) => ({ ...s }));
+    this.allSegments = blueprint.segments.map((s) => ({
+      ...s,
+      y0: s.y0 * scaleY,
+      cy1: s.cy1 * scaleY,
+      cy2: s.cy2 * scaleY,
+      y1: s.y1 * scaleY,
+    }));
+
+    this.baseOrbY.clear();
+    this.allOrbs = blueprint.orbs.map((o) => {
+      this.baseOrbY.set(o.id, o.worldY);
+      return {
+        ...o,
+        collected: false,
+        screenY: o.worldY * scaleY,
+      };
+    });
+
+    this.allTraps = blueprint.traps.map((t) => ({
+      ...t,
+      destroyed: false,
+      passed: false,
+      screenFloorY: ((t as RuntimeTrap).screenFloorY ?? this.refHeight * 0.64) * scaleY,
+    }));
+
+    this.basePortalY.clear();
+    this.allDivingNodes = blueprint.divingNodes.map((n) => {
+      this.basePortalY.set(n.id, n.worldY);
+      return {
+        ...n,
+        worldY: n.worldY * scaleY,
+        activated: false,
+      };
+    });
+
+    this.update(0, viewportWidth, viewportHeight, 0, {
       low: 0.2,
       mid: 0.2,
       high: 0.2,
       overall: 0.2,
       isBeat: false,
     });
+  }
+
+  /**
+   * Fallback reset when no blueprint is loaded yet.
+   */
+  public reset(viewportWidth: number, viewportHeight: number): void {
+    this.viewportHeight = viewportHeight;
+    if (this.hasBlueprint && this.baseSegments.length > 0) {
+      const scaleY = viewportHeight / this.refHeight;
+      for (let i = 0; i < this.allSegments.length; i++) {
+        const base = this.baseSegments[i]!;
+        const seg = this.allSegments[i]!;
+        seg.y0 = base.y0 * scaleY;
+        seg.cy1 = base.cy1 * scaleY;
+        seg.cy2 = base.cy2 * scaleY;
+        seg.y1 = base.y1 * scaleY;
+      }
+      for (const orb of this.allOrbs) {
+        orb.collected = false;
+        orb.screenY = (this.baseOrbY.get(orb.id) ?? orb.worldY) * scaleY;
+      }
+      for (const trap of this.allTraps) {
+        trap.destroyed = false;
+        trap.passed = false;
+      }
+      for (const node of this.allDivingNodes) {
+        node.activated = false;
+        node.worldY = (this.basePortalY.get(node.id) ?? node.worldY) * scaleY;
+      }
+      this.update(0, viewportWidth, viewportHeight, 0, {
+        low: 0.2,
+        mid: 0.2,
+        high: 0.2,
+        overall: 0.2,
+        isBeat: false,
+      });
+      return;
+    }
+
+    // Minimal procedural fallback if started without blueprint
+    this.baseSegments = [];
+    this.allSegments = [];
+    const baseFloor = viewportHeight * 0.64;
+    for (let i = -1; i < 40; i++) {
+      const x0 = i * this.segWidth;
+      const x1 = (i + 1) * this.segWidth;
+      const y0 = baseFloor + Math.sin(i * 0.8) * 50;
+      const y1 = baseFloor + Math.sin((i + 1) * 0.8) * 50;
+      const seg: BezierSegment = {
+        x0,
+        y0,
+        cx1: x0 + this.segWidth * 0.35,
+        cy1: y0,
+        cx2: x0 + this.segWidth * 0.65,
+        cy2: y1,
+        x1,
+        y1,
+        energyBand: FORMS_ORDER[Math.abs(i) % FORMS_ORDER.length]!,
+      };
+      this.baseSegments.push({ ...seg });
+      this.allSegments.push(seg);
+    }
+    this.visibleSegments = this.allSegments.slice(0, 16);
   }
 
   public update(
@@ -58,22 +173,22 @@ export class BezierTerrain {
     freq: FrequencyBands
   ): void {
     this.viewportHeight = viewportHeight;
-    this.ensureSegments(cameraX, viewportWidth, freq);
+    const scaleY = viewportHeight / this.refHeight;
+    const minX = cameraX - this.segWidth * 2;
+    const maxX = cameraX + viewportWidth + this.segWidth * 4;
 
-    // Prune off-screen segments, traps, and diving nodes behind camera
-    const pruneX = cameraX - SEGMENT_WIDTH * 2;
-    while (this.segments.length > 0 && this.segments[0]!.x1 < pruneX) {
-      const removed = this.segments.shift()!;
-      this.baseHeights.delete(removed.x0);
-    }
-    this.traps = this.traps.filter((t) => t.worldX > pruneX);
-    this.divingNodes = this.divingNodes.filter((n) => n.worldX > pruneX);
+    // 1. Slice visible Bezier segments using direct index calculation (O(1) window)
+    const startIdx = Math.max(0, Math.floor(minX / this.segWidth));
+    const endIdx = Math.min(
+      this.allSegments.length - 1,
+      Math.ceil(maxX / this.segWidth) + 2
+    );
 
-    // Live audio-reactive modulation of visible Bezier control points
-    for (let i = 0; i < this.segments.length; i++) {
-      const seg = this.segments[i]!;
-      const base = this.baseHeights.get(seg.x0);
-      if (!base) continue;
+    this.visibleSegments = [];
+    for (let i = startIdx; i <= endIdx; i++) {
+      const seg = this.allSegments[i];
+      const base = this.baseSegments[i];
+      if (!seg || !base) continue;
 
       const bandEnergy =
         seg.energyBand === 'bass'
@@ -82,125 +197,99 @@ export class BezierTerrain {
           ? freq.mid
           : freq.high;
 
-      const waveMod1 = Math.sin(timeSec * 5.2 + i * 0.9) * (14 + bandEnergy * 46);
-      const waveMod2 = Math.cos(timeSec * 4.6 + i * 1.1) * (14 + bandEnergy * 46);
+      // Preserve the pre-computed musical mountain/valley anchor points (y0, y1)
+      // while adding subtle live harmonic breathing to the control handles (cy1, cy2)
+      const harmonicBreath = (6 + bandEnergy * 18) * scaleY;
+      const mod1 = Math.sin(timeSec * 6.5 + i * 0.9) * harmonicBreath;
+      const mod2 = Math.cos(timeSec * 5.8 + i * 1.1) * harmonicBreath;
 
-      seg.cy1 = base.cy1 + waveMod1;
-      seg.cy2 = base.cy2 + waveMod2;
+      seg.y0 = base.y0 * scaleY;
+      seg.y1 = base.y1 * scaleY;
+      seg.cy1 = base.cy1 * scaleY + mod1;
+      seg.cy2 = base.cy2 * scaleY + mod2;
+
+      this.visibleSegments.push(seg);
     }
 
-    // Keep Beat Traps anchored to the live Bezier floor height
-    const fallbackY = viewportHeight * 0.68;
-    for (const trap of this.traps) {
-      const { floorY } = evaluateBezierFloor(this.segments, trap.worldX, fallbackY);
-      trap.screenFloorY = floorY;
-    }
-  }
+    const fallbackY = viewportHeight * 0.64;
 
-  private ensureSegments(
-    cameraX: number,
-    viewportWidth: number,
-    freq: FrequencyBands
-  ): void {
-    const horizonX = cameraX + viewportWidth + SEGMENT_WIDTH * 3;
-    const baseFloor = this.viewportHeight * 0.68;
-
-    while (this.nextSegmentX < horizonX) {
-      const x0 = this.nextSegmentX;
-      const x1 = x0 + SEGMENT_WIDTH;
-      const y0 = this.lastAnchorY;
-
-      const energyBand = FORMS_ORDER[this.segmentIndex % FORMS_ORDER.length]!;
-      const energyAmt =
-        energyBand === 'bass'
-          ? freq.low
-          : energyBand === 'synth'
-          ? freq.mid
-          : freq.high;
-
-      // Smooth undulating target height within playable vertical bounds
-      const rawDelta =
-        Math.sin(this.segmentIndex * 0.85) * (42 + energyAmt * 68) +
-        Math.cos(this.segmentIndex * 0.45) * 28;
-      const y1 = Math.max(
-        this.viewportHeight * 0.42,
-        Math.min(this.viewportHeight * 0.78, baseFloor + rawDelta)
-      );
-
-      // C1 continuous control points
-      const cx1 = x0 + SEGMENT_WIDTH * 0.35;
-      const cy1 = y0 + this.lastSlopeY * 0.45;
-      const nextSlope = (y1 - y0) * 0.55;
-      const cx2 = x0 + SEGMENT_WIDTH * 0.65;
-      const cy2 = y1 - nextSlope * 0.45;
-
-      const seg: BezierSegment = {
-        x0,
-        y0,
-        cx1,
-        cy1,
-        cx2,
-        cy2,
-        x1,
-        y1,
-        energyBand,
-      };
-
-      this.segments.push(seg);
-      this.baseHeights.set(x0, { y0, cy1, cy2, y1 });
-
-      // Spawn Beat Traps or Frequency Diving Nodes after initial safe runway
-      if (this.segmentIndex >= 4) {
-        if (this.segmentIndex % 9 === 0) {
-          // Spawn a Frequency Diving Node (Low / Mid / High Portal) at build-up intervals
-          const targetForm =
-            FORMS_ORDER[Math.floor(this.segmentIndex / 9) % FORMS_ORDER.length]!;
-          const midX = (x0 + x1) * 0.5;
-          const { floorY } = evaluateBezierFloor([seg], midX, baseFloor);
-          this.divingNodes.push({
-            id: this.nextId++,
-            worldX: midX,
-            worldY: floorY - 72,
-            radius: 30,
-            targetForm,
-            activated: false,
-          });
-        } else if (this.segmentIndex % 2 === 1) {
-          // Spawn a Beat Trap spike on the waveform
-          const trapX = x0 + SEGMENT_WIDTH * 0.52;
-          const { floorY } = evaluateBezierFloor([seg], trapX, baseFloor);
-          this.traps.push({
-            id: this.nextId++,
-            worldX: trapX,
-            width: 34,
-            height: 40 + Math.floor(energyAmt * 18),
-            destroyed: false,
-            passed: false,
-            screenFloorY: floorY,
-          });
-        }
+    // 2. Filter visible Rhythm Resonance Orbs & keep contour orbs locked to live curve
+    this.visibleOrbs = [];
+    for (let i = 0; i < this.allOrbs.length; i++) {
+      const orb = this.allOrbs[i]!;
+      if (orb.collected || orb.worldX < minX || orb.worldX > maxX) continue;
+      if (orb.isArcOrb) {
+        const baseY = this.baseOrbY.get(orb.id) ?? orb.worldY;
+        orb.screenY = baseY * scaleY + Math.sin(timeSec * 5 + orb.id) * 4;
+      } else {
+        const { floorY } = evaluateBezierFloor(this.visibleSegments, orb.worldX, fallbackY);
+        orb.screenY = floorY - 26 * scaleY;
       }
+      this.visibleOrbs.push(orb);
+    }
 
-      this.lastAnchorY = y1;
-      this.lastSlopeY = nextSlope;
-      this.nextSegmentX = x1;
-      this.segmentIndex++;
+    // 3. Filter visible Beat Traps & anchor to floor
+    this.visibleTraps = [];
+    for (let i = 0; i < this.allTraps.length; i++) {
+      const trap = this.allTraps[i]!;
+      if (trap.destroyed || trap.worldX < minX || trap.worldX > maxX) continue;
+      const { floorY } = evaluateBezierFloor(this.visibleSegments, trap.worldX, fallbackY);
+      trap.screenFloorY = floorY;
+      this.visibleTraps.push(trap);
+    }
+
+    // 4. Filter visible Frequency Diving Nodes
+    this.visibleDivingNodes = [];
+    for (let i = 0; i < this.allDivingNodes.length; i++) {
+      const node = this.allDivingNodes[i]!;
+      if (node.activated || node.worldX < minX || node.worldX > maxX) continue;
+      const baseY = this.basePortalY.get(node.id) ?? node.worldY;
+      node.worldY = baseY * scaleY;
+      this.visibleDivingNodes.push(node);
     }
   }
 
-  public sampleFloor(worldX: number): { floorY: number; slope: number; angleRad: number } {
-    return evaluateBezierFloor(this.segments, worldX, this.viewportHeight * 0.68);
+  public sampleFloor(worldX: number): {
+    floorY: number;
+    slope: number;
+    angleRad: number;
+    segment?: BezierSegment;
+  } {
+    const fallbackY = this.viewportHeight * 0.64;
+    const res = evaluateBezierFloor(this.visibleSegments, worldX, fallbackY);
+    let matchedSeg: BezierSegment | undefined;
+    for (let i = 0; i < this.visibleSegments.length; i++) {
+      const seg = this.visibleSegments[i]!;
+      if (worldX >= seg.x0 && worldX <= seg.x1) {
+        matchedSeg = seg;
+        break;
+      }
+    }
+    return { ...res, segment: matchedSeg };
+  }
+
+  public getSectionIntensityAt(worldX: number): SectionIntensity {
+    const { segment } = this.sampleFloor(worldX);
+    return segment?.intensity ?? 'groove';
   }
 
   public getSegments(): BezierSegment[] {
-    return this.segments;
+    return this.visibleSegments;
   }
 
-  public getTraps(): Array<BeatTrap & { screenFloorY?: number }> {
-    return this.traps;
+  public getOrbs(): ResonanceOrb[] {
+    return this.visibleOrbs;
+  }
+
+  public getTotalOrbCount(): number {
+    return this.allOrbs.length;
+  }
+
+  public getTraps(): RuntimeTrap[] {
+    return this.visibleTraps;
   }
 
   public getDivingNodes(): DivingNode[] {
-    return this.divingNodes;
+    return this.visibleDivingNodes;
   }
 }
