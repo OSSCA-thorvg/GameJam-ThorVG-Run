@@ -285,5 +285,9 @@ export class AudioEngine {
   public get playing(): boolean {
     return this.isPlaying;
   }
+
+  public getBuffer(): AudioBuffer | null {
+    return this.currentBuffer;
+  }
 }
 

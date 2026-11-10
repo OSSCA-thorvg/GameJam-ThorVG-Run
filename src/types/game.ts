@@ -1,10 +1,14 @@
-import type { BannerKey } from '../i18n/messages';
+import type { BannerKey, Messages } from '../i18n/messages';
 
 export type RendererMode = 'sw' | 'gl';
 
 export type ResonanceFormType = 'bass' | 'synth' | 'treble';
 
 export type GamePhase = 'MACRO' | 'ZOOM_IN' | 'MICRO' | 'ZOOM_OUT';
+
+export type SectionIntensity = 'calm' | 'groove' | 'drop';
+
+export type LoadingStageKey = keyof Messages['loading']['stages'];
 
 export interface FrequencyBands {
   low: number;     // 20Hz ~ 250Hz normalized (0.0 ~ 1.0)
@@ -25,6 +29,20 @@ export interface TrackMetadata {
   assetUrl?: string;
 }
 
+export interface AudioSlice {
+  index: number;
+  timeSec: number;
+  worldX0: number;
+  worldX1: number;
+  low: number;
+  mid: number;
+  high: number;
+  overall: number;
+  dominantBand: ResonanceFormType;
+  intensity: SectionIntensity;
+  isBeatOnset: boolean;
+}
+
 export interface BezierSegment {
   x0: number;
   y0: number;
@@ -35,6 +53,47 @@ export interface BezierSegment {
   x1: number;
   y1: number;
   energyBand: ResonanceFormType;
+  sliceIndex?: number;
+  timeSec?: number;
+  low?: number;
+  mid?: number;
+  high?: number;
+  overall?: number;
+  intensity?: SectionIntensity;
+  isBeatOnset?: boolean;
+  isCrest?: boolean;
+}
+
+export interface ResonanceOrb {
+  id: number;
+  worldX: number;
+  worldY: number;
+  radius: number;
+  band: ResonanceFormType;
+  isArcOrb: boolean;
+  collected: boolean;
+  screenY?: number;
+}
+
+export interface TrackBlueprint {
+  trackId: string;
+  durationSec: number;
+  referenceHeight: number;
+  worldPxPerSec: number;
+  segmentWidth: number;
+  slices: AudioSlice[];
+  segments: BezierSegment[];
+  orbs: ResonanceOrb[];
+  traps: BeatTrap[];
+  divingNodes: DivingNode[];
+  sectionCounts: Record<SectionIntensity, number>;
+  totalBeats: number;
+}
+
+export interface LoadingProgress {
+  progress: number; // 0.0 ~ 1.0
+  stage: LoadingStageKey;
+  blueprint?: TrackBlueprint;
 }
 
 export interface BeatTrap {
@@ -120,6 +179,10 @@ export interface RenderFrameState {
   invulnerableTimer: number;
   /** Seconds of run-cycle animation; advances only while running on ground/rails, scaled by speed. */
   runCycleTime: number;
+  orbs?: ResonanceOrb[];
+  surfMomentum?: number; // 0.0 ~ 1.0
+  isDiving?: boolean;
+  sectionIntensity?: SectionIntensity;
   shockwaves: ShockwaveEffect[];
   afterimages: AfterimageTrail[];
   particles: VectorParticle[];
@@ -141,6 +204,11 @@ export interface HUDTelemetry {
   isFinished: boolean;
   trapsDestroyed: number;
   divesCompleted: number;
+  surfMomentum?: number; // 0.0 ~ 1.0
+  speedMultiplier?: number; // 1.0 ~ 2.4
+  orbsCollected?: number;
+  totalOrbs?: number;
+  sectionIntensity?: SectionIntensity;
 }
 
 /** Acoustic Zoom filter state. 'macro' = full spectrum, otherwise the isolated band. */
