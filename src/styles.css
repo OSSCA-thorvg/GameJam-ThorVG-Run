@@ -734,3 +734,205 @@ body,
   color: #8ba3cc;
   font-size: 11px;
 }
+
+/* ==================== HUD Surf / Orbs / Section Badges ==================== */
+.surf-badge,
+.orbs-badge {
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 9px;
+  border-radius: 6px;
+}
+
+.surf-badge {
+  color: #05d5ff;
+  background: rgba(5, 213, 255, 0.14);
+  border: 1px solid rgba(5, 213, 255, 0.35);
+}
+
+.orbs-badge {
+  color: #ffe600;
+  background: rgba(255, 230, 0, 0.12);
+  border: 1px solid rgba(255, 230, 0, 0.32);
+}
+
+.section-pill {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+}
+
+.section-pill.calm {
+  color: #05d5ff;
+  background: rgba(5, 213, 255, 0.14);
+}
+
+.section-pill.groove {
+  color: #ffe600;
+  background: rgba(255, 230, 0, 0.14);
+}
+
+.section-pill.drop {
+  color: #ff2a6d;
+  background: rgba(255, 42, 109, 0.22);
+  border: 1px solid rgba(255, 42, 109, 0.5);
+}
+
+/* ==================== Track Blueprint Loading Modal ==================== */
+.loading-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 45%, rgba(5, 213, 255, 0.14), rgba(5, 8, 18, 0.88));
+  backdrop-filter: blur(14px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.loading-modal-card {
+  width: 100%;
+  max-width: 620px;
+  background: rgba(10, 14, 28, 0.94);
+  border: 1.5px solid rgba(5, 213, 255, 0.45);
+  border-radius: 18px;
+  padding: 28px 32px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7), 0 0 38px rgba(5, 213, 255, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.loading-badge {
+  align-self: flex-start;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #05d5ff;
+  background: rgba(5, 213, 255, 0.12);
+  border: 1px solid rgba(5, 213, 255, 0.35);
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.loading-track-title {
+  font-size: 24px;
+  font-weight: 900;
+  color: #ffffff;
+}
+
+.loading-subtitle {
+  font-size: 13px;
+  color: #9cb3d9;
+  margin-top: -8px;
+}
+
+.blueprint-minimap {
+  width: 100%;
+  height: 92px;
+  background: rgba(5, 8, 18, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: flex-end;
+}
+
+.blueprint-bars {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+}
+
+.blueprint-bar {
+  flex: 1;
+  min-width: 2px;
+  border-radius: 2px 2px 0 0;
+  transition: height 0.18s ease, background-color 0.18s ease, opacity 0.18s ease;
+}
+
+.loading-progress-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.loading-stage-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: #d6e6ff;
+}
+
+.loading-stage-row strong {
+  color: #ffe600;
+  font-size: 15px;
+}
+
+.loading-bar-bg {
+  width: 100%;
+  height: 10px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.loading-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #05d5ff, #ffe600, #ff2a6d);
+  transition: width 0.12s ease-out;
+}
+
+.blueprint-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.blueprint-stat {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9px;
+  padding: 9px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.blueprint-stat small {
+  font-size: 10px;
+  color: #8ba3cc;
+  letter-spacing: 0.05em;
+}
+
+.blueprint-stat strong {
+  font-size: 16px;
+  color: #ffffff;
+}
+
+.loading-tip-box {
+  background: rgba(5, 213, 255, 0.07);
+  border: 1px solid rgba(5, 213, 255, 0.25);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.loading-tip-box strong {
+  font-size: 12px;
+  color: #05d5ff;
+}
+
+.loading-tip-box p {
+  font-size: 12px;
+  color: #c5daf6;
+  line-height: 1.45;
+}
+

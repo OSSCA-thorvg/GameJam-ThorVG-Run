@@ -41,6 +41,15 @@ export const ResultModal: React.FC<ResultModalProps> = ({
             <strong style={{ color: formCfg.colorHex }}>x{hud.maxCombo}</strong>
           </div>
           <div className="stat-item">
+            <small>{t.result.orbs}</small>
+            <strong>
+              {format(t.result.orbsValue, {
+                collected: hud.orbsCollected ?? 0,
+                total: hud.totalOrbs ?? 0,
+              })}
+            </strong>
+          </div>
+          <div className="stat-item">
             <small>{t.result.dives}</small>
             <strong>{format(t.result.divesValue, { count: hud.divesCompleted })}</strong>
           </div>

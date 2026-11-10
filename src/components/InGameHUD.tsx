@@ -27,10 +27,20 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
   const formCfg = FORM_CONFIG[hud.activeForm];
   const formText = t.forms[hud.activeForm];
   const progressPct = Math.min(100, Math.max(0, Math.round(hud.progress * 100)));
+  const surfSpeed = (hud.speedMultiplier ?? 1.0).toFixed(1);
+  const orbsCollected = hud.orbsCollected ?? 0;
+  const totalOrbs = hud.totalOrbs ?? 0;
+  const intensity = hud.sectionIntensity ?? 'groove';
+  const sectionLabel =
+    intensity === 'drop'
+      ? t.hud.sectionDrop
+      : intensity === 'groove'
+      ? t.hud.sectionGroove
+      : t.hud.sectionCalm;
 
   return (
     <div className="hud-overlay">
-      {/* Top-left: renderer badge, live FPS, zoom scale */}
+      {/* Top-left: renderer badge, live FPS, zoom scale, surf speed, orbs, section */}
       <div className="hud-top-left">
         <div className="hud-badge-row">
           <span className={`renderer-badge ${hud.rendererMode === 'gl' ? 'gpu' : 'cpu'}`}>
@@ -38,6 +48,10 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
           </span>
           <span className="fps-badge">FPS: {hud.fps}</span>
           <span className="zoom-badge">ZOOM: {hud.zoomDisplay.toFixed(1)}x</span>
+          <span className="surf-badge">{format(t.hud.surfSpeed, { speed: surfSpeed })}</span>
+          <span className="orbs-badge">
+            {format(t.hud.orbs, { collected: orbsCollected, total: totalOrbs })}
+          </span>
         </div>
         <div className="hud-sub-status">
           <span>
@@ -46,6 +60,7 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
           <span>
             {t.hud.audioFilter}: <strong>{t.filter[hud.acousticFilter]}</strong>
           </span>
+          <span className={`section-pill ${intensity}`}>{sectionLabel}</span>
         </div>
       </div>
 

@@ -5,12 +5,14 @@ import { BUILT_IN_TRACKS } from './audio/proceduralTracks';
 import { InGameHUD } from './components/InGameHUD';
 import { ResultModal } from './components/ResultModal';
 import { StartScreen } from './components/StartScreen';
+import { TrackLoadingModal } from './components/TrackLoadingModal';
 import { GameEngine } from './engine/GameEngine';
 import { trackTitle } from './i18n/display';
 import { useI18n } from './i18n/I18nProvider';
 import { ThorVGRenderer } from './renderer/ThorVGRenderer';
 import {
   type HUDTelemetry,
+  type LoadingProgress,
   type RendererMode,
   type ResonanceFormType,
   type TrackMetadata,
@@ -32,9 +34,14 @@ const INITIAL_HUD: HUDTelemetry = {
   isFinished: false,
   trapsDestroyed: 0,
   divesCompleted: 0,
+  surfMomentum: 0.18,
+  speedMultiplier: 1.0,
+  orbsCollected: 0,
+  totalOrbs: 0,
+  sectionIntensity: 'calm',
 };
 
-type Screen = 'splash' | 'menu' | 'game';
+type Screen = 'splash' | 'menu' | 'loading' | 'game';
 
 export const App: React.FC = () => {
   const { t } = useI18n();
@@ -48,6 +55,10 @@ export const App: React.FC = () => {
   const [screen, setScreen] = useState<Screen>('splash');
   const inGame = screen === 'game';
   const [hud, setHud] = useState<HUDTelemetry>(INITIAL_HUD);
+  const [loadingState, setLoadingState] = useState<LoadingProgress>({
+    progress: 0,
+    stage: 'decoding',
+  });
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<ThorVGRenderer | null>(null);
@@ -58,6 +69,7 @@ export const App: React.FC = () => {
   previewFormRef.current = previewForm;
   // The splash plays once per page load, even if the renderer is re-created later.
   const splashStartedRef = useRef<boolean>(false);
+  const launchSeqRef = useRef<number>(0);
 
   if (!audioRef.current) {
     audioRef.current = new AudioEngine();
@@ -115,10 +127,10 @@ export const App: React.FC = () => {
     };
   }, [rendererMode]);
 
-  // Menu preview loop. In 'game' the GameEngine owns the frame loop instead.
+  // Menu / Loading background preview loop. In 'game' the GameEngine owns the frame loop instead.
   useEffect(() => {
     const renderer = rendererRef.current;
-    if (screen !== 'menu' || !renderer?.ready) return;
+    if ((screen !== 'menu' && screen !== 'loading') || !renderer?.ready) return;
 
     let rafId = 0;
     const start = performance.now();
@@ -142,19 +154,17 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // Keyboard controls for Jump / Phase Invert, Dash / Form Skill, and Resonance Swap
+  // Keyboard controls for Jump / Crest Launch / Phase Invert, Wave Dive & Pump, Form Skill, and Resonance Swap
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (!inGame) return;
       if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
         e.preventDefault();
         gameEngineRef.current?.handlePrimaryAction();
-      } else if (
-        e.code === 'ShiftLeft' ||
-        e.code === 'ShiftRight' ||
-        e.code === 'ArrowDown' ||
-        e.code === 'KeyS'
-      ) {
+      } else if (e.code === 'ArrowDown' || e.code === 'KeyS') {
+        e.preventDefault();
+        gameEngineRef.current?.setDiveHeld(true);
+      } else if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
         e.preventDefault();
         gameEngineRef.current?.handleSecondaryAction();
       } else if (e.code === 'Digit1') {
@@ -170,8 +180,19 @@ export const App: React.FC = () => {
         setScreen('menu');
       }
     };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'ArrowDown' || e.code === 'KeyS') {
+        gameEngineRef.current?.setDiveHeld(false);
+      }
+    };
+
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
   }, [inGame]);
 
   const handleUploadFile = useCallback(async (file: File, supportedFormats: readonly AudioFormat[]) => {
@@ -182,16 +203,45 @@ export const App: React.FC = () => {
   }, []);
 
   const handleStartRun = useCallback(() => {
+    const engine = gameEngineRef.current;
+    if (!engine) return;
+
+    const seq = ++launchSeqRef.current;
     setHud((prev) => ({
       ...INITIAL_HUD,
       rendererMode,
       activeForm: prev.activeForm,
     }));
-    setScreen('game');
-    void gameEngineRef.current?.startRun(selectedTrack);
+    setLoadingState({ progress: 0.06, stage: 'decoding' });
+    setScreen('loading');
+
+    void (async () => {
+      try {
+        const blueprint = await engine.prepareRun(selectedTrack, (status) => {
+          if (launchSeqRef.current === seq) {
+            setLoadingState(status);
+          }
+        });
+        if (launchSeqRef.current !== seq) return;
+        setLoadingState({ progress: 1.0, stage: 'ready', blueprint });
+
+        // Brief hold at 100% so the player can see the pre-computed track waveform minimap
+        await new Promise((r) => setTimeout(r, 380));
+        if (launchSeqRef.current !== seq) return;
+
+        setScreen('game');
+        await engine.startRun(selectedTrack);
+      } catch (err) {
+        console.error('Track blueprint preparation failed:', err);
+        if (launchSeqRef.current === seq) {
+          setScreen('menu');
+        }
+      }
+    })();
   }, [rendererMode, selectedTrack]);
 
   const handleReturnToMenu = useCallback(() => {
+    launchSeqRef.current++;
     gameEngineRef.current?.stopRun();
     setScreen('menu');
   }, []);
@@ -201,11 +251,10 @@ export const App: React.FC = () => {
       gameEngineRef.current?.stopRun();
       setRendererMode(nextMode);
       setTimeout(() => {
-        setScreen('game');
-        void gameEngineRef.current?.startRun(selectedTrack);
+        handleStartRun();
       }, 120);
     },
-    [selectedTrack]
+    [handleStartRun]
   );
 
   return (
@@ -245,6 +294,13 @@ export const App: React.FC = () => {
           onSelectRenderer={setRendererMode}
           onSelectPreviewForm={setPreviewForm}
           onStartRun={handleStartRun}
+        />
+      )}
+
+      {screen === 'loading' && (
+        <TrackLoadingModal
+          trackTitle={trackTitle(t, selectedTrack)}
+          loadingState={loadingState}
         />
       )}
 

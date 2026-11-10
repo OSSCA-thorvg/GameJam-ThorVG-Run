@@ -264,6 +264,9 @@ export const StartScreen: React.FC<StartScreenProps> = ({
               <strong>{t.menu.controls.jumpKey}</strong>: {t.menu.controls.jumpDesc}
             </span>
             <span>
+              <strong>{t.menu.controls.diveKey}</strong>: {t.menu.controls.diveDesc}
+            </span>
+            <span>
               <strong>{t.menu.controls.skillKey}</strong>: {t.menu.controls.skillDesc}
             </span>
             <span>
