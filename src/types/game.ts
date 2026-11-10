@@ -4,11 +4,61 @@ export type RendererMode = 'sw' | 'gl';
 
 export type ResonanceFormType = 'bass' | 'synth' | 'treble';
 
+export type DifficultyMode = 'easy' | 'normal' | 'hard';
+
+export type JudgmentGrade = 'PERFECT' | 'GREAT' | 'GOOD' | 'MISS';
+
+export type ResultRank = 'S' | 'A' | 'B' | 'C';
+
 export type GamePhase = 'MACRO' | 'ZOOM_IN' | 'MICRO' | 'ZOOM_OUT';
 
 export type SectionIntensity = 'calm' | 'groove' | 'drop';
 
 export type LoadingStageKey = keyof Messages['loading']['stages'];
+
+export interface DifficultyProfile {
+  mode: DifficultyMode;
+  worldPxPerSec: number;
+  density: number;
+  perfectMs: number;
+  greatMs: number;
+  goodMs: number;
+  colorHex: string;
+  rgb: [number, number, number];
+}
+
+export const DIFFICULTY_CONFIG: Record<DifficultyMode, DifficultyProfile> = {
+  easy: {
+    mode: 'easy',
+    worldPxPerSec: 450,
+    density: 0.65,
+    perfectMs: 75,
+    greatMs: 135,
+    goodMs: 185,
+    colorHex: '#00F5A0',
+    rgb: [0, 245, 160],
+  },
+  normal: {
+    mode: 'normal',
+    worldPxPerSec: 550,
+    density: 1.0,
+    perfectMs: 55,
+    greatMs: 105,
+    goodMs: 155,
+    colorHex: '#05D5FF',
+    rgb: [5, 213, 255],
+  },
+  hard: {
+    mode: 'hard',
+    worldPxPerSec: 660,
+    density: 1.35,
+    perfectMs: 40,
+    greatMs: 80,
+    goodMs: 125,
+    colorHex: '#FF2A6D',
+    rgb: [255, 42, 109],
+  },
+};
 
 export interface FrequencyBands {
   low: number;     // 20Hz ~ 250Hz normalized (0.0 ~ 1.0)
@@ -62,6 +112,9 @@ export interface BezierSegment {
   intensity?: SectionIntensity;
   isBeatOnset?: boolean;
   isCrest?: boolean;
+  /** True when the ground track breaks open into an abyss chasm requiring a jump or dash. */
+  isGap?: boolean;
+  deckLevel?: 0 | 1 | 2;
 }
 
 export interface ResonanceOrb {
@@ -73,19 +126,82 @@ export interface ResonanceOrb {
   isArcOrb: boolean;
   collected: boolean;
   screenY?: number;
+  /** Exact beat timestamp (seconds) for shrinking timing ring & ms judgment. */
+  timeSec?: number;
+  /** True when this note is a primary on-beat target displaying a shrinking timing ring. */
+  isBeatTarget?: boolean;
+}
+
+export interface SkyPlatform {
+  id: number;
+  x0: number;
+  x1: number;
+  worldY: number;
+  screenY?: number;
+  band: ResonanceFormType;
+}
+
+export interface JumpPad {
+  id: number;
+  worldX: number;
+  worldY: number;
+  screenY?: number;
+  timeSec: number;
+  triggered: boolean;
+}
+
+export interface DashRing {
+  id: number;
+  worldX: number;
+  worldY: number;
+  screenY?: number;
+  radius: number;
+  timeSec: number;
+  triggered: boolean;
+}
+
+export interface HoldRail {
+  id: number;
+  x0: number;
+  x1: number;
+  worldY: number;
+  screenY?: number;
+  band: ResonanceFormType;
+  active: boolean;
+  completed: boolean;
+}
+
+export interface JudgmentFeedback {
+  id: number;
+  grade: JudgmentGrade;
+  deltaMs?: number;
+  bonusScore: number;
+}
+
+export interface JudgmentCounts {
+  perfect: number;
+  great: number;
+  good: number;
+  miss: number;
 }
 
 export interface TrackBlueprint {
   trackId: string;
+  difficulty: DifficultyMode;
   durationSec: number;
   referenceHeight: number;
   worldPxPerSec: number;
   segmentWidth: number;
+  leadInSegments: number;
   slices: AudioSlice[];
   segments: BezierSegment[];
   orbs: ResonanceOrb[];
   traps: BeatTrap[];
   divingNodes: DivingNode[];
+  skyPlatforms: SkyPlatform[];
+  jumpPads: JumpPad[];
+  dashRings: DashRing[];
+  holdRails: HoldRail[];
   sectionCounts: Record<SectionIntensity, number>;
   totalBeats: number;
 }
@@ -103,6 +219,7 @@ export interface BeatTrap {
   height: number;
   destroyed: boolean;
   passed: boolean;
+  timeSec?: number;
 }
 
 export interface DivingNode {
@@ -155,15 +272,18 @@ export interface RenderFrameState {
   width: number;
   height: number;
   timeSec: number;
+  audioSec?: number;
+  worldPxPerSec?: number;
+  beatPulse?: number;
   phase: GamePhase;
-  zoomScale: number;        // 1.0x -> 50.0x (with Origin Rebasing)
+  zoomScale: number;          // 1.0x -> 50.0x (with Origin Rebasing)
   rebasedZoomDisplay: number; // Effective HUD display scale (e.g. 1.0x ~ 64.0x)
   cameraX: number;
   focalScreenX: number;
   focalScreenY: number;
   activeForm: ResonanceFormType;
   divingTargetForm: ResonanceFormType;
-  resonanceGauge: number;   // 0 ~ 100
+  resonanceGauge: number;     // 0 ~ 100
   frequency: FrequencyBands;
   segments: BezierSegment[];
   traps: BeatTrap[];
@@ -180,6 +300,10 @@ export interface RenderFrameState {
   /** Seconds of run-cycle animation; advances only while running on ground/rails, scaled by speed. */
   runCycleTime: number;
   orbs?: ResonanceOrb[];
+  skyPlatforms?: SkyPlatform[];
+  jumpPads?: JumpPad[];
+  dashRings?: DashRing[];
+  holdRails?: HoldRail[];
   surfMomentum?: number; // 0.0 ~ 1.0
   isDiving?: boolean;
   sectionIntensity?: SectionIntensity;
@@ -190,6 +314,7 @@ export interface RenderFrameState {
 
 export interface HUDTelemetry {
   rendererMode: RendererMode;
+  difficulty?: DifficultyMode;
   fps: number;
   phase: GamePhase;
   zoomDisplay: number;
@@ -209,6 +334,11 @@ export interface HUDTelemetry {
   orbsCollected?: number;
   totalOrbs?: number;
   sectionIntensity?: SectionIntensity;
+  accuracy?: number; // 0 ~ 100
+  rank?: ResultRank;
+  judgment?: JudgmentFeedback | null;
+  judgmentCounts?: JudgmentCounts;
+  gimmicksTriggered?: number;
 }
 
 /** Acoustic Zoom filter state. 'macro' = full spectrum, otherwise the isolated band. */
@@ -251,4 +381,3 @@ export const FORM_CONFIG: Record<
     secondaryRgb: [255, 250, 160],
   },
 };
-
