@@ -63,8 +63,10 @@ export class ThorVGRenderer {
   private bgShape: TvgShape | null = null;
   private gridShape: TvgShape | null = null;
   private waveFillShape: TvgShape | null = null;
+  private spectrumShape: TvgShape | null = null;
   private waveGlowShape: TvgShape | null = null;
   private waveCoreShape: TvgShape | null = null;
+  private orbsShape: TvgShape | null = null;
   private trapsShape: TvgShape | null = null;
   private portalsShape: TvgShape | null = null;
   private effectsShape: TvgShape | null = null;
@@ -127,8 +129,10 @@ export class ThorVGRenderer {
       this.bgShape = new TVG.Shape();
       this.gridShape = new TVG.Shape();
       this.waveFillShape = new TVG.Shape();
+      this.spectrumShape = new TVG.Shape();
       this.waveGlowShape = new TVG.Shape();
       this.waveCoreShape = new TVG.Shape();
+      this.orbsShape = new TVG.Shape();
       this.trapsShape = new TVG.Shape();
       this.portalsShape = new TVG.Shape();
       this.effectsShape = new TVG.Shape();
@@ -139,8 +143,10 @@ export class ThorVGRenderer {
         this.bgShape,
         this.gridShape,
         this.waveFillShape,
+        this.spectrumShape,
         this.waveGlowShape,
         this.waveCoreShape,
+        this.orbsShape,
         this.trapsShape,
         this.portalsShape,
         this.effectsShape,
@@ -153,8 +159,10 @@ export class ThorVGRenderer {
         .add(this.bgShape)
         .add(this.gridShape)
         .add(this.waveFillShape)
+        .add(this.spectrumShape)
         .add(this.waveGlowShape)
         .add(this.waveCoreShape)
+        .add(this.orbsShape)
         .add(this.trapsShape)
         .add(this.portalsShape)
         .add(this.effectsShape)
@@ -266,8 +274,10 @@ export class ThorVGRenderer {
     for (const shape of [
       this.gridShape,
       this.waveFillShape,
+      this.spectrumShape,
       this.waveGlowShape,
       this.waveCoreShape,
+      this.orbsShape,
       this.trapsShape,
       this.portalsShape,
       this.effectsShape,
@@ -378,22 +388,24 @@ export class ThorVGRenderer {
     }
     this.gridShape!.stroke({ width: 1, color: [35, 55, 95, 110] });
 
-    // 3. Animated Cubic Bezier Audio Waveform
-    const baseFloorY = height * 0.68;
-    const segCount = 6;
+    // 3. Animated Cubic Bezier Audio Waveform & Sub-Wave Spectrum Bars
+    const baseFloorY = height * 0.66;
+    const segCount = 8;
     const segWidth = width / segCount;
 
     this.waveFillShape!.reset().moveTo(0, height).lineTo(0, baseFloorY);
+    this.spectrumShape!.reset();
     this.waveGlowShape!.reset().moveTo(0, baseFloorY);
     this.waveCoreShape!.reset().moveTo(0, baseFloorY);
+    this.orbsShape!.reset();
 
     let prevY = baseFloorY;
     for (let i = 0; i < segCount; i++) {
       const x0 = i * segWidth;
       const x1 = (i + 1) * segWidth;
-      const amp1 = Math.sin(timeSec * 3.2 + i * 1.3) * 55;
-      const amp2 = Math.cos(timeSec * 2.6 + (i + 1) * 1.1) * 55;
-      const y1 = baseFloorY + Math.sin(timeSec * 2.2 + (i + 1) * 0.9) * 38;
+      const amp1 = Math.sin(timeSec * 3.4 + i * 1.3) * 68;
+      const amp2 = Math.cos(timeSec * 2.8 + (i + 1) * 1.1) * 68;
+      const y1 = baseFloorY + Math.sin(timeSec * 2.4 + (i + 1) * 1.1) * 56;
 
       const cx1 = x0 + segWidth * 0.35;
       const cy1 = prevY + amp1;
@@ -403,12 +415,26 @@ export class ThorVGRenderer {
       this.waveFillShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
       this.waveGlowShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
       this.waveCoreShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
+
+      // Sub-wave spectrum bars
+      const barW = Math.max(6, segWidth * 0.24);
+      const midWaveY = (prevY + y1) * 0.5 + 16;
+      const barH = Math.max(24, (height - midWaveY) * (0.45 + 0.35 * Math.sin(timeSec * 4 + i)));
+      this.spectrumShape!.appendRect(x0 + segWidth * 0.38, height - barH, barW, barH, { rx: 3, ry: 3 });
+
+      // Preview rhythm orbs along the wave
+      const orbX = (x0 + x1) * 0.5;
+      const orbY = (prevY + y1) * 0.5 - 30;
+      this.orbsShape!.appendCircle(orbX, orbY, 7, 7);
+
       prevY = y1;
     }
 
-    this.waveFillShape!.lineTo(width, height).close().fill(r, g, b, 34);
-    this.waveGlowShape!.stroke({ width: 10, color: [r, g, b, 85] });
+    this.waveFillShape!.lineTo(width, height).close().fill(r, g, b, 36);
+    this.spectrumShape!.fill(r, g, b, 68);
+    this.waveGlowShape!.stroke({ width: 10, color: [r, g, b, 92] });
     this.waveCoreShape!.stroke({ width: 3.5, color: [255, 255, 255, 240] });
+    this.orbsShape!.fill(r, g, b, 210).stroke({ width: 2, color: [255, 255, 255, 240] });
 
     // Clear unused gameplay shapes in preview
     this.trapsShape!.reset();
@@ -494,16 +520,31 @@ export class ThorVGRenderer {
       this.renderMacroWorld(state, tx, ty, ts);
     }
 
-    // 3. Render Shockwaves & Afterimage Effects
+    // 3. Render Shockwaves, Afterimage Effects & High-Speed Surf Lines
     this.effectsShape!.reset();
+    let hasEffects = false;
     for (const sw of state.shockwaves) {
       this.effectsShape!.appendCircle(tx(sw.x), ty(sw.y), ts(sw.radius), ts(sw.radius));
+      hasEffects = true;
     }
     for (const ai of state.afterimages) {
       this.appendPolygonPath(this.effectsShape!, tx(ai.x), ty(ai.y), ts(state.playerRadius * 0.85), ai.rotation, ai.form);
+      hasEffects = true;
     }
-    if (state.shockwaves.length > 0 || state.afterimages.length > 0) {
-      this.effectsShape!.stroke({ width: 3, color: [fr, fg, fb, 190] });
+    const surfMomentum = state.surfMomentum ?? 0;
+    if (surfMomentum > 0.42 || state.isDashing) {
+      const lineCount = state.isDashing ? 8 : Math.floor(surfMomentum * 7);
+      for (let i = 0; i < lineCount; i++) {
+        const seed = (i * 197 + Math.floor(state.timeSec * 22)) % 100;
+        const lx = ((width - ((state.timeSec * 1450 + i * 230) % (width + 260))) + width) % width;
+        const ly = i % 2 === 0 ? 45 + (seed % 140) : height - 55 - (seed % 140);
+        const len = 65 + surfMomentum * 95;
+        this.effectsShape!.moveTo(lx, ly).lineTo(lx + len, ly);
+        hasEffects = true;
+      }
+    }
+    if (hasEffects) {
+      this.effectsShape!.stroke({ width: 2.5, color: [fr, fg, fb, 185] });
     }
 
     // 4. Player: Among Us crewmate over a form-colored aura (polygon character as fallback).
@@ -552,24 +593,32 @@ export class ThorVGRenderer {
     ty: (y: number) => number,
     ts: (s: number) => number
   ): void {
-    const { width, height, segments, traps, divingNodes, activeForm, cameraX } = state;
+    const { width, height, segments, traps, divingNodes, activeForm, cameraX, frequency } = state;
     const [fr, fg, fb] = FORM_CONFIG[activeForm].rgb;
+    const [sr, sg, sb] = FORM_CONFIG[activeForm].secondaryRgb;
+    const isDrop = state.sectionIntensity === 'drop';
 
     this.waveFillShape!.reset();
+    this.spectrumShape!.reset();
     this.waveGlowShape!.reset();
     this.waveCoreShape!.reset();
+    this.orbsShape!.reset();
 
     if (segments.length > 0) {
       const first = segments[0]!;
       const startX = tx(first.x0 - cameraX);
       const startY = ty(first.y0);
+      const harmonicOffset = ts(32 + frequency.mid * 24);
 
       this.waveFillShape!.moveTo(startX, height).lineTo(startX, startY);
       this.waveGlowShape!.moveTo(startX, startY);
       this.waveCoreShape!.moveTo(startX, startY);
+      this.spectrumShape!.moveTo(startX, startY + harmonicOffset);
 
       let endX = startX;
       for (const seg of segments) {
+        const x0 = tx(seg.x0 - cameraX);
+        const y0 = ty(seg.y0);
         const cx1 = tx(seg.cx1 - cameraX);
         const cy1 = ty(seg.cy1);
         const cx2 = tx(seg.cx2 - cameraX);
@@ -580,12 +629,79 @@ export class ThorVGRenderer {
         this.waveFillShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
         this.waveGlowShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
         this.waveCoreShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
+
+        // Secondary harmonic echo ribbon beneath main wave
+        this.spectrumShape!.cubicTo(
+          cx1,
+          cy1 + harmonicOffset,
+          cx2,
+          cy2 + harmonicOffset,
+          x1,
+          y1 + harmonicOffset
+        );
+
+        // Pre-computed audio spectrum pillar inside the wave body
+        if (x1 >= -20 && x0 <= width + 20) {
+          const spanW = Math.max(8, x1 - x0);
+          const barW = Math.max(4, spanW * 0.28);
+          const segEnergy = seg.overall ?? frequency.overall;
+          const midWaveY = Math.max(y0, y1) + ts(10);
+          const maxBarSpace = Math.max(16, height - midWaveY);
+          const barH = Math.min(maxBarSpace, maxBarSpace * (0.28 + segEnergy * 0.68));
+          if (barH > 8) {
+            this.spectrumShape!.appendRect(
+              x0 + (spanW - barW) * 0.5,
+              height - barH,
+              barW,
+              barH,
+              { rx: 3, ry: 3 }
+            );
+          }
+        }
+
         endX = x1;
       }
 
-      this.waveFillShape!.lineTo(Math.max(width, endX), height).close().fill(fr, fg, fb, 38);
-      this.waveGlowShape!.stroke({ width: ts(9), color: [fr, fg, fb, 95] });
-      this.waveCoreShape!.stroke({ width: ts(3), color: [255, 255, 255, 245] });
+      const fillAlpha = isDrop ? 54 : 38;
+      const glowWidth = ts(isDrop || frequency.isBeat ? 12.5 : 9);
+      const glowAlpha = isDrop || frequency.isBeat ? 135 : 95;
+
+      this.waveFillShape!.lineTo(Math.max(width, endX), height).close().fill(fr, fg, fb, fillAlpha);
+      this.spectrumShape!
+        .fill(fr, fg, fb, isDrop ? 78 : 54)
+        .stroke({ width: ts(1.8), color: [sr, sg, sb, 130] });
+      this.waveGlowShape!.stroke({ width: glowWidth, color: [fr, fg, fb, glowAlpha] });
+      this.waveCoreShape!.stroke({ width: ts(3.2), color: [255, 255, 255, 245] });
+    }
+
+    // Rhythm Resonance Orbs (along the wave contour & airborne Crest Launch arcs)
+    const orbs = state.orbs ?? [];
+    let hasOrbs = false;
+    for (const orb of orbs) {
+      if (orb.collected) continue;
+      const ox = tx(orb.worldX - cameraX);
+      if (ox < -40 || ox > width + 40) continue;
+      const oy = ty(orb.screenY ?? orb.worldY);
+      const pulse = 1 + Math.sin(state.timeSec * 8 + orb.id * 0.7) * 0.14;
+      const rad = ts(orb.radius * pulse);
+
+      if (orb.isArcOrb) {
+        // Diamond star for airborne Crest Launch arc orbs
+        this.orbsShape!
+          .moveTo(ox, oy - rad * 1.35)
+          .lineTo(ox + rad * 1.35, oy)
+          .lineTo(ox, oy + rad * 1.35)
+          .lineTo(ox - rad * 1.35, oy)
+          .close();
+      } else {
+        this.orbsShape!.appendCircle(ox, oy, rad, rad);
+      }
+      hasOrbs = true;
+    }
+    if (hasOrbs) {
+      this.orbsShape!
+        .fill(sr, sg, sb, 225)
+        .stroke({ width: ts(2.2), color: [255, 255, 255, 250] });
     }
 
     // Beat Traps (Spikes on the waveform)
@@ -648,8 +764,10 @@ export class ThorVGRenderer {
     const stepW = width / steps;
 
     this.waveFillShape!.reset();
+    this.spectrumShape!.reset();
     this.waveGlowShape!.reset();
     this.waveCoreShape!.reset();
+    this.orbsShape!.reset();
 
     // Upper and Lower raw oscillating waveform tunnel walls
     const upperWallBase = height * 0.16;
