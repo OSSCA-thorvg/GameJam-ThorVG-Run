@@ -255,32 +255,32 @@ export async function analyzeTrackBlueprint(
     } else {
       const wavePhase = (i - 3) % 4;
       const intensityScale =
-        slice.intensity === 'drop' ? 1.38 : slice.intensity === 'groove' ? 1.0 : 0.56;
+        slice.intensity === 'drop' ? 1.42 : slice.intensity === 'groove' ? 1.08 : 0.72;
       const bandBoost =
         slice.dominantBand === 'bass'
-          ? slice.low * 1.15
+          ? slice.low * 1.18
           : slice.dominantBand === 'synth'
-          ? slice.mid * 1.05
-          : slice.high * 1.0;
-      const energy = Math.min(1.0, slice.overall * 0.65 + bandBoost * 0.35);
-      const beatBonus = slice.isBeatOnset ? 26 : 0;
+          ? slice.mid * 1.08
+          : slice.high * 1.02;
+      const energy = Math.min(1.0, slice.overall * 0.62 + bandBoost * 0.38);
+      const beatBonus = slice.isBeatOnset ? 32 : 0;
 
       // Amplitude in pixels on 720p canvas
-      const amplitude = (38 + energy * 108 + beatBonus) * intensityScale;
+      const amplitude = (58 + energy * 128 + beatBonus) * intensityScale;
 
       if (wavePhase === 0) {
         // Climbing uphill toward the crest
-        y1 = baseFloorY - amplitude * 0.35;
+        y1 = baseFloorY - amplitude * 0.38;
       } else if (wavePhase === 1) {
         // Wave Crest (Peak) — launch point!
         y1 = baseFloorY - amplitude;
         isCrest = true;
       } else if (wavePhase === 2) {
         // Carving steeply downhill from the crest into the trough
-        y1 = baseFloorY + amplitude * 0.42;
+        y1 = baseFloorY + amplitude * 0.45;
       } else {
         // Bottom of the Wave Trough (Valley) — maximum pump compression
-        y1 = baseFloorY + amplitude * 0.92;
+        y1 = baseFloorY + amplitude * 0.96;
       }
 
       y1 = Math.max(minPeakY, Math.min(maxTroughY, y1));
@@ -359,7 +359,47 @@ export async function analyzeTrackBlueprint(
       continue;
     }
 
-    // 2. Airborne Parabolic Orb Arcs launching off Wave Crests in Groove/Drop sections
+    // 2. Beat Traps placed on real Beat Onsets on uphill/trough approaches (never blind downhill landings)
+    const minTrapGap =
+      slice.intensity === 'drop' ? 420 : slice.intensity === 'groove' ? 560 : 780;
+    const spawnedTrapOnSegment =
+      slice.isBeatOnset &&
+      (wavePhase === 0 || wavePhase === 3) &&
+      seg.x0 - lastTrapX >= minTrapGap &&
+      Math.abs(seg.x0 - lastPortalX) > 260;
+
+    if (spawnedTrapOnSegment) {
+      lastTrapX = seg.x0;
+      const trapX = seg.x0 + SEGMENT_WIDTH * 0.52;
+      const trapFloorY = evaluateCubicBezier(seg.y0, seg.cy1, seg.cy2, seg.y1, 0.52);
+      const trapHeight = Math.round(38 + slice.overall * 22);
+      traps.push({
+        id: nextId++,
+        worldX: trapX,
+        width: 34,
+        height: trapHeight,
+        destroyed: false,
+        passed: false,
+        screenFloorY: trapFloorY,
+      } as BeatTrap & { screenFloorY?: number });
+
+      // Place a 3-orb jump arc above the Beat Trap to guide the player's jump over it
+      for (const offset of [-36, 0, 36]) {
+        const arcLift = offset === 0 ? 64 : 48;
+        orbs.push({
+          id: nextId++,
+          worldX: trapX + offset,
+          worldY: Math.max(REFERENCE_HEIGHT * 0.16, trapFloorY - trapHeight - arcLift),
+          radius: 10.5,
+          band: slice.dominantBand,
+          isArcOrb: true,
+          collected: false,
+        });
+      }
+      continue;
+    }
+
+    // 3. Airborne Parabolic Orb Arcs launching off Wave Crests in Groove/Drop sections
     if (seg.isCrest && (slice.intensity === 'drop' || (slice.intensity === 'groove' && slice.isBeatOnset))) {
       const crestX = seg.x1;
       const crestY = seg.y1;
@@ -384,7 +424,7 @@ export async function analyzeTrackBlueprint(
         });
       }
     } else if (wavePhase === 2 || wavePhase === 3) {
-      // 3. Wave-Contour Surfing Orbs along downhill & trough curves
+      // 4. Wave-Contour Surfing Orbs along downhill & trough curves (only on trap-free segments)
       if (i % 2 === 0 || slice.intensity === 'drop') {
         for (const t of [0.28, 0.72]) {
           const ox = seg.x0 + (seg.x1 - seg.x0) * t;
@@ -400,29 +440,6 @@ export async function analyzeTrackBlueprint(
           });
         }
       }
-    }
-
-    // 4. Beat Traps placed on real Beat Onsets on uphill/trough approaches (never blind downhill landings)
-    const minTrapGap =
-      slice.intensity === 'drop' ? 420 : slice.intensity === 'groove' ? 560 : 780;
-    if (
-      slice.isBeatOnset &&
-      (wavePhase === 0 || wavePhase === 3) &&
-      seg.x0 - lastTrapX >= minTrapGap &&
-      Math.abs(seg.x0 - lastPortalX) > 260
-    ) {
-      lastTrapX = seg.x0;
-      const trapX = seg.x0 + SEGMENT_WIDTH * 0.52;
-      const trapFloorY = evaluateCubicBezier(seg.y0, seg.cy1, seg.cy2, seg.y1, 0.52);
-      traps.push({
-        id: nextId++,
-        worldX: trapX,
-        width: 34,
-        height: Math.round(38 + slice.overall * 22),
-        destroyed: false,
-        passed: false,
-        screenFloorY: trapFloorY,
-      } as BeatTrap & { screenFloorY?: number });
     }
   }
 

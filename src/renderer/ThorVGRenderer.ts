@@ -613,7 +613,6 @@ export class ThorVGRenderer {
       this.waveFillShape!.moveTo(startX, height).lineTo(startX, startY);
       this.waveGlowShape!.moveTo(startX, startY);
       this.waveCoreShape!.moveTo(startX, startY);
-      this.spectrumShape!.moveTo(startX, startY + harmonicOffset);
 
       let endX = startX;
       for (const seg of segments) {
@@ -630,46 +629,53 @@ export class ThorVGRenderer {
         this.waveGlowShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
         this.waveCoreShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
 
-        // Secondary harmonic echo ribbon beneath main wave
-        this.spectrumShape!.cubicTo(
-          cx1,
-          cy1 + harmonicOffset,
-          cx2,
-          cy2 + harmonicOffset,
-          x1,
-          y1 + harmonicOffset
-        );
+        // Pre-computed audio spectrum equalizer bars under each wave segment (3 bars per segment)
+        if (x1 >= -30 && x0 <= width + 30) {
+          const spanW = Math.max(12, x1 - x0);
+          const subBars = 3;
+          const slotW = spanW / subBars;
+          const barW = Math.max(3, slotW * 0.56);
+          const segLow = seg.low ?? frequency.low;
+          const segMid = seg.mid ?? frequency.mid;
+          const segHigh = seg.high ?? frequency.high;
+          const bands = [segLow, segMid, segHigh];
 
-        // Pre-computed audio spectrum pillar inside the wave body
-        if (x1 >= -20 && x0 <= width + 20) {
-          const spanW = Math.max(8, x1 - x0);
-          const barW = Math.max(4, spanW * 0.28);
-          const segEnergy = seg.overall ?? frequency.overall;
-          const midWaveY = Math.max(y0, y1) + ts(10);
-          const maxBarSpace = Math.max(16, height - midWaveY);
-          const barH = Math.min(maxBarSpace, maxBarSpace * (0.28 + segEnergy * 0.68));
-          if (barH > 8) {
-            this.spectrumShape!.appendRect(
-              x0 + (spanW - barW) * 0.5,
-              height - barH,
-              barW,
-              barH,
-              { rx: 3, ry: 3 }
-            );
+          for (let b = 0; b < subBars; b++) {
+            const u = (b + 0.5) / subBars;
+            const bx = x0 + b * slotW + (slotW - barW) * 0.5;
+            const approxWaveY = y0 + (y1 - y0) * u + ts(10);
+            const availH = Math.max(12, height - approxWaveY);
+            const bandVal = bands[b] ?? 0.3;
+            const barH = Math.min(availH, availH * (0.22 + bandVal * 0.72));
+            if (barH > 6) {
+              this.spectrumShape!.appendRect(bx, height - barH, barW, barH, { rx: 2, ry: 2 });
+            }
           }
         }
 
         endX = x1;
       }
 
+      // Secondary harmonic echo curve stroked cleanly along the wave glow layer
+      this.waveGlowShape!.moveTo(startX, startY + harmonicOffset);
+      for (const seg of segments) {
+        const cx1 = tx(seg.cx1 - cameraX);
+        const cy1 = ty(seg.cy1) + harmonicOffset;
+        const cx2 = tx(seg.cx2 - cameraX);
+        const cy2 = ty(seg.cy2) + harmonicOffset;
+        const x1 = tx(seg.x1 - cameraX);
+        const y1 = ty(seg.y1) + harmonicOffset;
+        this.waveGlowShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
+      }
+
       const fillAlpha = isDrop ? 54 : 38;
-      const glowWidth = ts(isDrop || frequency.isBeat ? 12.5 : 9);
-      const glowAlpha = isDrop || frequency.isBeat ? 135 : 95;
+      const glowWidth = ts(isDrop || frequency.isBeat ? 11 : 8);
+      const glowAlpha = isDrop || frequency.isBeat ? 125 : 88;
 
       this.waveFillShape!.lineTo(Math.max(width, endX), height).close().fill(fr, fg, fb, fillAlpha);
       this.spectrumShape!
-        .fill(fr, fg, fb, isDrop ? 78 : 54)
-        .stroke({ width: ts(1.8), color: [sr, sg, sb, 130] });
+        .fill(fr, fg, fb, isDrop ? 82 : 52)
+        .stroke({ width: ts(1.2), color: [sr, sg, sb, 115] });
       this.waveGlowShape!.stroke({ width: glowWidth, color: [fr, fg, fb, glowAlpha] });
       this.waveCoreShape!.stroke({ width: ts(3.2), color: [255, 255, 255, 245] });
     }
