@@ -76,6 +76,21 @@ export class AudioEngine {
     return this.ctx;
   }
 
+  /**
+   * Synchronously initializes/resumes the AudioContext inside a direct user gesture
+   * so later async `startPlayback()` never stalls waiting on browser autoplay unlock.
+   */
+  public unlockFromGesture(): void {
+    try {
+      const ctx = this.ensureContext();
+      if (ctx.state === 'suspended') {
+        void ctx.resume().catch(() => undefined);
+      }
+    } catch {
+      // Ignore if AudioContext creation is unavailable
+    }
+  }
+
   public async loadTrack(track: TrackMetadata): Promise<TrackMetadata> {
     const ctx = this.ensureContext();
     this.stop();

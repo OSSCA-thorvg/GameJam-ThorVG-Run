@@ -6,6 +6,7 @@ import {
   FORM_CONFIG,
   type BannerMessage,
   type DifficultyMode,
+  type FrequencyBands,
   type GamePhase,
   type HUDTelemetry,
   type JudgmentGrade,
@@ -244,17 +245,28 @@ export class GameEngine {
       this.activeBlueprint.difficulty !== difficulty
     ) {
       await this.prepareRun(track, onProgress, difficulty);
-    } else {
+    } else if (this.currentTrackMeta?.id !== track.id || !this.audio.getBuffer()) {
       this.currentTrackMeta = await this.audio.loadTrack(track);
+    } else {
+      this.audio.stop();
     }
 
     this.resetState();
-    await this.audio.startPlayback();
+    this.renderer?.clearForTransition();
+    this.renderCurrentState(0, this.audio.getFrequencyData());
+    this.hudDirty = false;
+    this.scoreJudge.consumeDirty();
+    this.publishHud(0, 1.0, false);
 
     this.running = true;
     this.lastFrameTime = performance.now();
     cancelAnimationFrame(this.rafId);
     this.rafId = requestAnimationFrame(this.loop);
+
+    await this.audio.startPlayback();
+    if (!this.running) {
+      this.audio.stop();
+    }
   }
 
   public stopRun(): void {
@@ -746,6 +758,46 @@ export class GameEngine {
 
     this.vfx.update(dt, stepX);
 
+    this.renderCurrentState(audioSec, freq);
+
+    const progress = this.audio.getProgress();
+    const isFinished = progress >= 0.995 || (!this.audio.playing && this.elapsedSec > 2.0);
+    if (isFinished) {
+      this.running = false;
+      if (!this.finishRecorded) {
+        this.finishRecorded = true;
+        if (this.currentTrackMeta) {
+          const { accuracy, rank } = this.scoreJudge.computeAccuracyAndRank();
+          const saved = saveTrackRunResult(this.currentTrackMeta, this.difficulty, {
+            score: Math.floor(this.scoreJudge.score),
+            rank,
+            accuracy,
+            maxCombo: this.scoreJudge.maxCombo,
+            starsCollected: this.scoreJudge.starsCollected,
+            judgmentCounts: this.scoreJudge.snapshotCounts(),
+          });
+          this.lastIsNewRecord = saved.isNewRecord;
+          this.lastScoreDelta = saved.scoreDelta;
+        }
+      }
+    }
+
+    this.hudPublishAccum += dt;
+    const scoreDirty = this.scoreJudge.consumeDirty();
+    if (
+      isFinished ||
+      this.hudDirty ||
+      scoreDirty ||
+      this.hudPublishAccum >= HUD_PUBLISH_INTERVAL_SEC
+    ) {
+      this.hudPublishAccum = 0;
+      this.hudDirty = false;
+      this.publishHud(progress, speedMultiplier, isFinished);
+    }
+  }
+
+  private renderCurrentState(audioSec: number, freq: FrequencyBands): void {
+    const playerScreenX = this.getPlayerScreenX();
     // Beat Camera Zoom Punch & Damped Impact Shake in MACRO phase
     const punchScale =
       this.overdriveTimer > 0
@@ -813,41 +865,6 @@ export class GameEngine {
       afterimages: this.vfx.getAfterimages(),
       particles: this.vfx.getParticles(),
     });
-
-    const progress = this.audio.getProgress();
-    const isFinished = progress >= 0.995 || (!this.audio.playing && this.elapsedSec > 2.0);
-    if (isFinished) {
-      this.running = false;
-      if (!this.finishRecorded) {
-        this.finishRecorded = true;
-        if (this.currentTrackMeta) {
-          const { accuracy, rank } = this.scoreJudge.computeAccuracyAndRank();
-          const saved = saveTrackRunResult(this.currentTrackMeta, this.difficulty, {
-            score: Math.floor(this.scoreJudge.score),
-            rank,
-            accuracy,
-            maxCombo: this.scoreJudge.maxCombo,
-            starsCollected: this.scoreJudge.starsCollected,
-            judgmentCounts: this.scoreJudge.snapshotCounts(),
-          });
-          this.lastIsNewRecord = saved.isNewRecord;
-          this.lastScoreDelta = saved.scoreDelta;
-        }
-      }
-    }
-
-    this.hudPublishAccum += dt;
-    const scoreDirty = this.scoreJudge.consumeDirty();
-    if (
-      isFinished ||
-      this.hudDirty ||
-      scoreDirty ||
-      this.hudPublishAccum >= HUD_PUBLISH_INTERVAL_SEC
-    ) {
-      this.hudPublishAccum = 0;
-      this.hudDirty = false;
-      this.publishHud(progress, speedMultiplier, isFinished);
-    }
   }
 
   private publishHud(

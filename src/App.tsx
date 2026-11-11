@@ -68,6 +68,7 @@ export const App: React.FC = () => {
   const [engineReady, setEngineReady] = useState<boolean>(false);
   /** Increments each time a renderer finishes init, so loops can restart on the new instance. */
   const [rendererEpoch, setRendererEpoch] = useState<number>(0);
+  const [launchKey, setLaunchKey] = useState<number>(0);
   const [screen, setScreen] = useState<Screen>('splash');
   const inGame = screen === 'game';
   const [hud, setHud] = useState<HUDTelemetry>(INITIAL_HUD);
@@ -118,12 +119,10 @@ export const App: React.FC = () => {
       .init(canvasEl, window.innerWidth, window.innerHeight)
       .then(() => {
         if (cancelled || !renderer.ready) return;
-        gameEngineRef.current?.attachRenderer(
-          renderer,
-          rendererMode,
-          window.innerWidth,
-          window.innerHeight
-        );
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        renderer.resize(w, h);
+        gameEngineRef.current?.attachRenderer(renderer, rendererMode, w, h);
         setEngineReady(true);
         setRendererEpoch((n) => n + 1);
 
@@ -149,10 +148,16 @@ export const App: React.FC = () => {
     };
   }, [rendererMode]);
 
-  // Menu / Loading background preview loop. Reflects selected difficulty speed live!
+  // Menu background preview loop. Stopped and cleared immediately on 'loading' / 'game'.
   useEffect(() => {
     const renderer = rendererRef.current;
-    if ((screen !== 'menu' && screen !== 'loading') || !renderer?.ready) return;
+    if (!renderer?.ready) return;
+
+    if (screen === 'loading') {
+      renderer.clearForTransition();
+      return;
+    }
+    if (screen !== 'menu') return;
 
     let rafId = 0;
     const start = performance.now();
@@ -180,6 +185,7 @@ export const App: React.FC = () => {
   const handleReturnToMenu = useCallback(() => {
     launchSeqRef.current++;
     gameEngineRef.current?.stopRun();
+    rendererRef.current?.clearForTransition();
     setScreen('menu');
   }, []);
 
@@ -226,7 +232,9 @@ export const App: React.FC = () => {
     const engine = gameEngineRef.current;
     if (!engine) return;
 
+    audioRef.current?.unlockFromGesture();
     const seq = ++launchSeqRef.current;
+    rendererRef.current?.clearForTransition();
     setHud((prev) => ({
       ...INITIAL_HUD,
       rendererMode,
@@ -255,8 +263,10 @@ export const App: React.FC = () => {
         await new Promise((r) => setTimeout(r, 480));
         if (launchSeqRef.current !== seq) return;
 
+        const runPromise = engine.startRun(selectedTrack, undefined, difficulty);
+        setLaunchKey((k) => k + 1);
         setScreen('game');
-        await engine.startRun(selectedTrack, undefined, difficulty);
+        await runPromise;
       } catch (err) {
         console.error('Track blueprint preparation failed:', err);
         if (launchSeqRef.current === seq) {
@@ -268,6 +278,7 @@ export const App: React.FC = () => {
 
   const handleSwitchRendererAndReplay = useCallback(
     (nextMode: RendererMode) => {
+      audioRef.current?.unlockFromGesture();
       gameEngineRef.current?.stopRun();
       setRendererMode(nextMode);
       setTimeout(() => {
@@ -321,6 +332,10 @@ export const App: React.FC = () => {
             gameEngineRef.current?.activateOverdrive();
           }}
         />
+      )}
+
+      {inGame && launchKey > 0 && (
+        <div key={launchKey} className="game-launch-veil" aria-hidden="true" />
       )}
 
       {inGame && hud.isFinished && (

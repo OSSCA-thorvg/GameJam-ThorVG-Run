@@ -323,6 +323,30 @@ export class ThorVGRenderer {
     this.hideCrewmate();
   }
 
+  /**
+   * Immediately resets all 21 pooled TvgShape layers, hides character/splash pictures,
+   * fills an opaque #070914 background, and flushes the canvas so zero menu/scene
+   * remnants survive across screen transitions.
+   */
+  public clearForTransition(): void {
+    if (!this.canvas || !this.tvg || !this.shapes || this.disposed) return;
+    const shapes = this.shapes;
+    shapes.bg.reset().appendRect(0, 0, this.width, this.height).fill(7, 9, 20, 255);
+    shapes.grid.reset();
+    resetWorldShapeLayers(shapes);
+    shapes.effects.reset();
+    shapes.playerGlow.reset();
+    shapes.playerCore.reset();
+    shapes.vfxGold.reset();
+    shapes.vfxCyan.reset();
+    shapes.vfxCrimson.reset();
+    this.hideCrewmate();
+    if (!this.splashActive && this.splashAnim?.picture) {
+      this.splashAnim.picture.visible(false);
+    }
+    this.canvas.update().render();
+  }
+
   public playSplash(): Promise<void> {
     const anim = this.splashAnim;
     const info = this.splashInfo;
@@ -341,7 +365,16 @@ export class ThorVGRenderer {
         cancelAnimationFrame(rafId);
         clearTimeout(safetyTimer);
         this.splashActive = false;
-        if (!this.disposed) picture.visible(false);
+        if (!this.disposed) {
+          picture.visible(false);
+          try {
+            this.canvas?.remove(picture);
+          } catch {
+            // Ignore if already detached from scene
+          }
+        }
+        this.splashAnim = null;
+        this.splashInfo = null;
         resolve();
       };
       const safetyTimer = setTimeout(finish, (durationSec + 1.5) * 1000);
