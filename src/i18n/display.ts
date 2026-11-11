@@ -10,6 +10,8 @@ export function resolveBanner(t: Messages, banner: BannerMessage): string {
     skill: formText?.skillName ?? '',
     band: formText?.band ?? '',
     count: banner.params?.count ?? 0,
+    collected: banner.params?.collected ?? 0,
+    total: banner.params?.total ?? 3,
   });
 }
 

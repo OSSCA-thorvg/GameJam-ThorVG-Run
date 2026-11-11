@@ -23,6 +23,7 @@ import {
 const INITIAL_HUD: HUDTelemetry = {
   rendererMode: 'sw',
   difficulty: 'normal',
+  sfxMode: 'full',
   fps: 60,
   phase: 'MACRO',
   zoomDisplay: 1.0,
@@ -32,6 +33,9 @@ const INITIAL_HUD: HUDTelemetry = {
   progress: 0,
   activeForm: 'synth',
   resonanceGauge: 40,
+  microSyncProgress: 0,
+  overdriveReady: false,
+  overdriveActive: false,
   acousticFilter: 'macro',
   statusBanner: null,
   isFinished: false,
@@ -41,12 +45,16 @@ const INITIAL_HUD: HUDTelemetry = {
   speedMultiplier: 1.0,
   orbsCollected: 0,
   totalOrbs: 0,
+  starsCollected: 0,
+  totalStars: 3,
   sectionIntensity: 'calm',
   accuracy: 100,
   rank: 'S',
   judgment: null,
   judgmentCounts: { perfect: 0, great: 0, good: 0, miss: 0 },
   gimmicksTriggered: 0,
+  isNewRecord: false,
+  scoreDelta: 0,
 };
 
 type Screen = 'splash' | 'menu' | 'loading' | 'game';
@@ -185,6 +193,15 @@ export const App: React.FC = () => {
       onDiveHoldChange: (held) => gameEngineRef.current?.setDiveHeld(held),
       onSecondaryPress: () => gameEngineRef.current?.handleSecondaryAction(),
       onSwapForm: (form) => gameEngineRef.current?.handleFormSwap(form),
+      onActivateOverdrive: () => {
+        gameEngineRef.current?.activateOverdrive();
+      },
+      onCycleSfxMode: () => {
+        const next = gameEngineRef.current?.cycleSfxMode();
+        if (next) {
+          setHud((prev) => ({ ...prev, sfxMode: next }));
+        }
+      },
       onPauseOrExit: handleReturnToMenu,
     });
     return controller.attach(shellRef.current);
@@ -214,6 +231,7 @@ export const App: React.FC = () => {
       ...INITIAL_HUD,
       rendererMode,
       difficulty,
+      sfxMode: gameEngineRef.current?.getSfxMode() ?? prev.sfxMode ?? 'full',
       activeForm: prev.activeForm,
     }));
     setLoadingState({ progress: 0.06, stage: 'decoding' });
@@ -293,6 +311,15 @@ export const App: React.FC = () => {
           onReturnToMenu={handleReturnToMenu}
           onToggleRendererInGame={(nextMode) => setRendererMode(nextMode)}
           onSwapForm={(form) => gameEngineRef.current?.handleFormSwap(form)}
+          onCycleSfxMode={() => {
+            const next = gameEngineRef.current?.cycleSfxMode();
+            if (next) {
+              setHud((prev) => ({ ...prev, sfxMode: next }));
+            }
+          }}
+          onActivateOverdrive={() => {
+            gameEngineRef.current?.activateOverdrive();
+          }}
         />
       )}
 

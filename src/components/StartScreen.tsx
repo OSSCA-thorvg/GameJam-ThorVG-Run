@@ -9,6 +9,7 @@ import {
   type AudioFormat,
 } from '../audio/audioFormats';
 import { BUILT_IN_TRACKS } from '../audio/proceduralTracks';
+import { getTrackRecord } from '../engine/recordsStore';
 import { trackArtist, trackTitle } from '../i18n/display';
 import { useI18n } from '../i18n/I18nProvider';
 import { LANGUAGE_LABELS, type Lang } from '../i18n/messages';
@@ -137,6 +138,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
             {allTracks.map((track, idx) => {
               const isSelected = selectedTrack.id === track.id;
               const title = trackTitle(t, track);
+              const rec = getTrackRecord(track, difficulty);
               return (
                 <button
                   key={track.id}
@@ -158,6 +160,20 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                       })}
                     </span>
                   </div>
+                  {rec && (
+                    <div className="track-record-badges">
+                      <span className="pb-pill">
+                        {format(t.menu.bestRecord, {
+                          rank: rec.bestRank,
+                          score: rec.bestScore.toLocaleString(),
+                        })}
+                      </span>
+                      <span className="pb-stars-pill">★ {rec.bestStars}/3</span>
+                      {rec.noMissCleared && (
+                        <span className="pb-nomiss-pill">{t.menu.noMissBadge}</span>
+                      )}
+                    </div>
+                  )}
                   {isSelected && <span className="selected-pill">{t.menu.selected}</span>}
                 </button>
               );
@@ -238,6 +254,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
               const accent = DIFFICULTY_ACCENTS[modeKey];
               const info = t.difficulties[modeKey];
               const active = difficulty === modeKey;
+              const modeRec = getTrackRecord(selectedTrack, modeKey);
               return (
                 <button
                   key={modeKey}
@@ -254,7 +271,14 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                 >
                   <div className="difficulty-tab-header">
                     <strong style={{ color: accent }}>{info.name}</strong>
-                    <small className="difficulty-speed-pill">{info.speed}</small>
+                    <div className="difficulty-pills-group">
+                      {modeRec && (
+                        <small className="difficulty-pb-chip">
+                          {modeRec.bestRank} · ★{modeRec.bestStars}/3
+                        </small>
+                      )}
+                      <small className="difficulty-speed-pill">{info.speed}</small>
+                    </div>
                   </div>
                   <span>{info.desc}</span>
                 </button>

@@ -14,6 +14,8 @@ interface InGameHUDProps {
   onReturnToMenu: () => void;
   onToggleRendererInGame: (next: RendererMode) => void;
   onSwapForm: (form: ResonanceFormType) => void;
+  onCycleSfxMode: () => void;
+  onActivateOverdrive: () => void;
 }
 
 export const InGameHUD: React.FC<InGameHUDProps> = ({
@@ -22,6 +24,8 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
   onReturnToMenu,
   onToggleRendererInGame,
   onSwapForm,
+  onCycleSfxMode,
+  onActivateOverdrive,
 }) => {
   const { t, format } = useI18n();
   const formCfg = FORM_CONFIG[hud.activeForm];
@@ -30,33 +34,70 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
   const surfSpeed = (hud.speedMultiplier ?? 1.0).toFixed(1);
   const orbsCollected = hud.orbsCollected ?? 0;
   const totalOrbs = hud.totalOrbs ?? 0;
+  const starsCollected = hud.starsCollected ?? 0;
+  const totalStars = hud.totalStars ?? 3;
+  const isNoMiss = (hud.judgmentCounts?.miss ?? 0) === 0;
   const accuracyText = (hud.accuracy ?? 100).toFixed(1);
   const diffMode = hud.difficulty ?? 'normal';
+  const sfxMode = hud.sfxMode ?? 'full';
+  const sfxLabel =
+    sfxMode === 'full' ? t.hud.sfxFull : sfxMode === 'impact' ? t.hud.sfxImpact : t.hud.sfxOff;
+
   const intensity = hud.sectionIntensity ?? 'groove';
   const sectionLabel =
     intensity === 'drop'
       ? t.hud.sectionDrop
       : intensity === 'groove'
-      ? t.hud.sectionGroove
-      : t.hud.sectionCalm;
+        ? t.hud.sectionGroove
+        : t.hud.sectionCalm;
+
+  // Signed FAST/SLOW/JUST timing indicator
+  const signedMs = hud.judgment?.signedDeltaMs;
+  const timingTag =
+    signedMs !== undefined && hud.judgment?.grade !== 'MISS'
+      ? Math.abs(signedMs) <= 12
+        ? {
+            cls: 'timing-just',
+            label: format(t.hud.justMs, { ms: Math.abs(signedMs) }),
+          }
+        : signedMs < 0
+          ? {
+              cls: 'timing-fast',
+              label: format(t.hud.fastMs, { ms: Math.abs(signedMs) }),
+            }
+          : {
+              cls: 'timing-slow',
+              label: format(t.hud.slowMs, { ms: Math.abs(signedMs) }),
+            }
+      : null;
+
+  const displayGauge = hud.phase === 'MICRO' ? (hud.microSyncProgress ?? 0) : hud.resonanceGauge;
+  const gaugeLabel =
+    hud.phase === 'MICRO'
+      ? format(t.hud.microSync, { value: displayGauge })
+      : hud.overdriveActive
+        ? format(t.hud.overdriveActive, { value: hud.resonanceGauge })
+        : format(t.hud.resonance, { value: hud.resonanceGauge });
 
   return (
     <div className="hud-overlay">
-      {/* Top-left: renderer badge, difficulty, live FPS, speed, accuracy, notes, section */}
+      {/* Top-left: renderer badge, difficulty, FPS, speed, accuracy, notes, prism stars, NO MISS */}
       <div className="hud-top-left">
         <div className="hud-badge-row">
           <span className={`renderer-badge ${hud.rendererMode === 'gl' ? 'gpu' : 'cpu'}`}>
             {hud.rendererMode === 'sw' ? t.hud.modeCpu : t.hud.modeGpu}
           </span>
-          <span className={`diff-badge ${diffMode}`}>
-            {t.difficulties[diffMode].name}
-          </span>
+          <span className={`diff-badge ${diffMode}`}>{t.difficulties[diffMode].name}</span>
           <span className="fps-badge">FPS: {hud.fps}</span>
           <span className="surf-badge">{format(t.hud.surfSpeed, { speed: surfSpeed })}</span>
           <span className="acc-badge">{format(t.hud.accuracy, { value: accuracyText })}</span>
           <span className="orbs-badge">
             {format(t.hud.orbs, { collected: orbsCollected, total: totalOrbs })}
           </span>
+          <span className="stars-badge">
+            {format(t.hud.stars, { collected: starsCollected, total: totalStars })}
+          </span>
+          {isNoMiss && <span className="nomiss-badge">{t.hud.noMissLive}</span>}
         </div>
         <div className="hud-sub-status">
           <span>
@@ -72,7 +113,7 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
         </div>
       </div>
 
-      {/* Top-right: score, combo, track progress, menu / renderer controls */}
+      {/* Top-right: score, uncapped combo, track progress, live SFX mode & renderer controls */}
       <div className="hud-top-right">
         <div className="score-row">
           <div className="score-box">
@@ -81,7 +122,13 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
           </div>
           <div className="combo-box">
             <small>{t.hud.combo}</small>
-            <strong style={{ color: formCfg.colorHex }}>x{hud.combo}</strong>
+            <strong
+              style={{
+                color: hud.overdriveActive ? '#FFE600' : formCfg.colorHex,
+              }}
+            >
+              x{hud.combo}
+            </strong>
           </div>
         </div>
 
@@ -101,18 +148,26 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
         <div className="hud-actions-row">
           <button
             type="button"
+            data-testid="sfx-mode-btn"
+            className={`hud-btn sfx-mode-btn sfx-${sfxMode}`}
+            onClick={onCycleSfxMode}
+          >
+            {sfxLabel}
+          </button>
+          <button
+            type="button"
             className="hud-btn"
             onClick={() => onToggleRendererInGame(hud.rendererMode === 'sw' ? 'gl' : 'sw')}
           >
             {hud.rendererMode === 'sw' ? t.hud.toGpu : t.hud.toCpu}
           </button>
-          <button type="button" className="hud-btn menu-return-btn" onClick={onReturnToMenu}>
-            {t.hud.menuReturn}
-          </button>
         </div>
+        <button type="button" className="hud-btn menu-return-btn" onClick={onReturnToMenu}>
+          {t.hud.menuReturn}
+        </button>
       </div>
 
-      {/* Real-time Floating Rhythm Timing Judgment Popup */}
+      {/* Real-time Floating Rhythm Timing Judgment Popup with Signed FAST / SLOW / JUST */}
       {hud.judgment && (
         <div
           key={hud.judgment.id}
@@ -120,23 +175,41 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
         >
           <strong>{t.judgments[hud.judgment.grade]}</strong>
           {hud.judgment.grade !== 'MISS' && (
-            <small>
-              +{hud.judgment.bonusScore}
-              {hud.judgment.deltaMs !== undefined ? ` · ±${hud.judgment.deltaMs}ms` : ''}
-            </small>
+            <div className="judgment-meta-row">
+              <small>+{hud.judgment.bonusScore}</small>
+              {timingTag && (
+                <small className={`timing-tag ${timingTag.cls}`}>{timingTag.label}</small>
+              )}
+            </div>
           )}
         </div>
       )}
 
-      {/* Center: dive / swap / gimmick banner */}
+      {/* Center: dive / swap / gimmick / overdrive banner */}
       {hud.statusBanner && (
-        <div className="hud-center-banner" style={{ borderColor: formCfg.colorHex }}>
+        <div
+          className="hud-center-banner"
+          style={{
+            borderColor: hud.overdriveActive ? '#FFE600' : formCfg.colorHex,
+          }}
+        >
           {resolveBanner(t, hud.statusBanner)}
         </div>
       )}
 
-      {/* Bottom-center: equipped resonance form and gauge */}
+      {/* Bottom-center: Manual Overdrive button, 3-color forms, and Resonance / Micro Sync bar */}
       <div className="hud-bottom-center">
+        {hud.overdriveReady && (
+          <button
+            type="button"
+            data-testid="overdrive-btn"
+            className="overdrive-ready-btn"
+            onClick={onActivateOverdrive}
+          >
+            {t.hud.overdriveReadyBtn}
+          </button>
+        )}
+
         <div className="resonance-forms-strip">
           {(['bass', 'synth', 'treble'] as ResonanceFormType[]).map((formKey, idx) => {
             const cfg = FORM_CONFIG[formKey];
@@ -162,15 +235,20 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
 
         <div className="gauge-wrapper">
           <div className="gauge-header">
-            <span style={{ color: formCfg.colorHex }}>
+            <span style={{ color: hud.overdriveActive ? '#FFE600' : formCfg.colorHex }}>
               ◆ {formText.name} — {formText.skillDesc}
             </span>
-            <strong>{format(t.hud.resonance, { value: hud.resonanceGauge })}</strong>
+            <strong className={hud.overdriveReady || hud.overdriveActive ? 'gauge-text-hot' : ''}>
+              {gaugeLabel}
+            </strong>
           </div>
           <div className="gauge-bar-bg">
             <div
-              className="gauge-bar-fill"
-              style={{ width: `${hud.resonanceGauge}%`, backgroundColor: formCfg.colorHex }}
+              className={`gauge-bar-fill ${hud.overdriveActive ? 'overdrive-active' : hud.overdriveReady ? 'overdrive-ready' : ''}`}
+              style={{
+                width: `${displayGauge}%`,
+                backgroundColor: hud.overdriveActive ? undefined : formCfg.colorHex,
+              }}
             />
           </div>
         </div>

@@ -36,12 +36,27 @@ export const ResultModal: React.FC<ResultModalProps> = ({
   const rankColor = RANK_COLORS[rank];
   const accuracy = (hud.accuracy ?? 100).toFixed(1);
   const counts = hud.judgmentCounts ?? { perfect: 0, great: 0, good: 0, miss: 0 };
+  const isNoMiss = counts.miss === 0;
 
   return (
     <div className="result-modal-backdrop">
       <div className="result-modal-card" style={{ borderColor: formCfg.colorHex }}>
         <span className="result-badge">{t.result.badge}</span>
         <h2>{trackTitle}</h2>
+
+        {(hud.isNewRecord || isNoMiss) && (
+          <div className="result-honors-row">
+            {hud.isNewRecord && (
+              <span className="result-new-record-pill">
+                {format(t.result.newRecord, {
+                  delta: Math.max(0, hud.scoreDelta ?? hud.score).toLocaleString(),
+                })}
+              </span>
+            )}
+            {isNoMiss && <span className="result-nomiss-pill">{t.result.noMissClear}</span>}
+          </div>
+        )}
+
         <p className="result-engine-tag">
           {t.result.renderedVia}{' '}
           <strong>{hud.rendererMode === 'sw' ? t.result.cpuEngine : t.result.gpuEngine}</strong>
@@ -90,10 +105,19 @@ export const ResultModal: React.FC<ResultModalProps> = ({
             </strong>
           </div>
           <div className="stat-item">
+            <small>{t.result.stars}</small>
+            <strong style={{ color: '#FFE600' }}>
+              {format(t.result.starsValue, {
+                collected: hud.starsCollected ?? 0,
+                total: hud.totalStars ?? 3,
+              })}
+            </strong>
+          </div>
+          <div className="stat-item">
             <small>{t.result.dives}</small>
             <strong>{format(t.result.divesValue, { count: hud.divesCompleted })}</strong>
           </div>
-          <div className="stat-item stat-item-wide">
+          <div className="stat-item">
             <small>{t.result.traps}</small>
             <strong>{format(t.result.trapsValue, { count: hud.trapsDestroyed })}</strong>
           </div>

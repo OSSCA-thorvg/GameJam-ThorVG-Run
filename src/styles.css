@@ -47,7 +47,7 @@ body,
   background: rgba(10, 14, 28, 0.88);
   border: 1px solid rgba(5, 213, 255, 0.35);
   border-radius: 18px;
-  padding: 18px 26px;
+  padding: 15px 24px;
   backdrop-filter: blur(16px);
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.65), 0 0 36px rgba(5, 213, 255, 0.12);
 }
@@ -111,7 +111,7 @@ body,
 }
 
 .menu-section {
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .menu-section h2 {
@@ -125,7 +125,9 @@ body,
 .track-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+  max-height: 100px;
+  overflow-y: auto;
 }
 
 .track-item {
@@ -134,7 +136,7 @@ body,
   gap: 12px;
   width: 100%;
   text-align: left;
-  padding: 11px 14px;
+  padding: 8px 12px;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -330,10 +332,10 @@ body,
 }
 
 .start-footer {
-  margin-top: 12px;
+  margin-top: 9px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
 }
 
 .start-run-btn {
@@ -617,7 +619,21 @@ body,
 .gauge-header {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  gap: 12px;
   font-size: 12px;
+}
+
+.gauge-header > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gauge-header > strong {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .gauge-bar-bg {
@@ -1122,4 +1138,194 @@ body,
 
 .stat-item-wide {
   grid-column: span 2;
+}
+
+/* ==================== Fun Upgrade v4: PB Badges, SFX Switcher, Overdrive & FAST/SLOW ==================== */
+.track-record-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.pb-pill,
+.pb-stars-pill,
+.pb-nomiss-pill {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.pb-pill {
+  color: #05d5ff;
+  background: rgba(5, 213, 255, 0.14);
+  border: 1px solid rgba(5, 213, 255, 0.35);
+}
+
+.pb-stars-pill {
+  color: #ffe600;
+  background: rgba(255, 230, 0, 0.14);
+  border: 1px solid rgba(255, 230, 0, 0.36);
+}
+
+.pb-nomiss-pill {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.16);
+  border: 1px solid rgba(52, 211, 153, 0.42);
+}
+
+.difficulty-pills-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.difficulty-pb-chip {
+  font-size: 10px;
+  font-weight: 800;
+  color: #ffe600;
+  background: rgba(255, 230, 0, 0.14);
+  border: 1px solid rgba(255, 230, 0, 0.35);
+  padding: 1px 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.stars-badge,
+.nomiss-badge {
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 9px;
+  border-radius: 6px;
+}
+
+.stars-badge {
+  color: #ffe600;
+  background: rgba(255, 230, 0, 0.16);
+  border: 1px solid rgba(255, 230, 0, 0.45);
+}
+
+.nomiss-badge {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.16);
+  border: 1px solid rgba(52, 211, 153, 0.45);
+}
+
+.sfx-mode-btn.sfx-full {
+  border-color: rgba(5, 213, 255, 0.55);
+  color: #8cf5ff;
+  background: rgba(5, 213, 255, 0.15);
+}
+
+.sfx-mode-btn.sfx-impact {
+  border-color: rgba(255, 230, 0, 0.55);
+  color: #ffe600;
+  background: rgba(255, 230, 0, 0.15);
+}
+
+.sfx-mode-btn.sfx-off {
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #9cb3d9;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.menu-return-btn {
+  width: 100%;
+  flex: none;
+}
+
+.judgment-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.timing-tag.timing-just {
+  color: #ffe600 !important;
+  border: 1px solid rgba(255, 230, 0, 0.45);
+}
+
+.timing-tag.timing-fast {
+  color: #05d5ff !important;
+  border: 1px solid rgba(5, 213, 255, 0.45);
+}
+
+.timing-tag.timing-slow {
+  color: #ff7aa8 !important;
+  border: 1px solid rgba(255, 42, 109, 0.45);
+}
+
+@keyframes overdrivePulse {
+  0%,
+  100% {
+    filter: brightness(1);
+    box-shadow: 0 0 18px rgba(255, 230, 0, 0.45);
+  }
+  50% {
+    filter: brightness(1.14);
+    box-shadow: 0 0 30px rgba(255, 230, 0, 0.85), 0 0 14px rgba(5, 213, 255, 0.65);
+  }
+}
+
+.overdrive-ready-btn {
+  width: 100%;
+  padding: 8px 14px;
+  border-radius: 9px;
+  border: 1.5px solid #ffe600;
+  background: linear-gradient(90deg, rgba(255, 42, 109, 0.88), rgba(255, 230, 0, 0.94), rgba(5, 213, 255, 0.88));
+  color: #070914;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  animation: overdrivePulse 0.9s ease-in-out infinite;
+}
+
+.hud-overlay:has(.overdrive-ready-btn) .hud-center-banner {
+  bottom: 176px;
+}
+
+.gauge-text-hot {
+  color: #ffe600;
+  text-shadow: 0 0 12px rgba(255, 230, 0, 0.65);
+}
+
+.gauge-bar-fill.overdrive-ready {
+  background: linear-gradient(90deg, #05d5ff, #ffe600) !important;
+  box-shadow: 0 0 14px rgba(255, 230, 0, 0.7);
+}
+
+.gauge-bar-fill.overdrive-active {
+  background: linear-gradient(90deg, #ff2a6d, #ffe600, #05d5ff) !important;
+  box-shadow: 0 0 16px rgba(255, 230, 0, 0.85);
+}
+
+.result-honors-row {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.result-new-record-pill,
+.result-nomiss-pill {
+  font-size: 11.5px;
+  font-weight: 900;
+  padding: 4px 11px;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+}
+
+.result-new-record-pill {
+  color: #070914;
+  background: linear-gradient(90deg, #ffe600, #05d5ff);
+  box-shadow: 0 0 18px rgba(255, 230, 0, 0.45);
+}
+
+.result-nomiss-pill {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.16);
+  border: 1px solid rgba(52, 211, 153, 0.5);
 }
