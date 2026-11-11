@@ -13,9 +13,8 @@ import { trackArtist, trackTitle } from '../i18n/display';
 import { useI18n } from '../i18n/I18nProvider';
 import { LANGUAGE_LABELS, type Lang } from '../i18n/messages';
 import {
-  FORM_CONFIG,
+  type DifficultyMode,
   type RendererMode,
-  type ResonanceFormType,
   type TrackMetadata,
 } from '../types/game';
 
@@ -23,27 +22,33 @@ interface StartScreenProps {
   selectedTrack: TrackMetadata;
   customTracks: TrackMetadata[];
   rendererMode: RendererMode;
-  previewForm: ResonanceFormType;
+  difficulty: DifficultyMode;
   engineReady: boolean;
   onSelectTrack: (track: TrackMetadata) => void;
   onUploadFile: (file: File, supportedFormats: readonly AudioFormat[]) => Promise<void>;
   onSelectRenderer: (mode: RendererMode) => void;
-  onSelectPreviewForm: (form: ResonanceFormType) => void;
+  onSelectDifficulty: (difficulty: DifficultyMode) => void;
   onStartRun: () => void;
 }
 
 const LANGS: Lang[] = ['en', 'ko'];
 
+const DIFFICULTY_ACCENTS: Record<DifficultyMode, string> = {
+  easy: '#05D5FF',
+  normal: '#FFE600',
+  hard: '#FF2A6D',
+};
+
 export const StartScreen: React.FC<StartScreenProps> = ({
   selectedTrack,
   customTracks,
   rendererMode,
-  previewForm,
+  difficulty,
   engineReady,
   onSelectTrack,
   onUploadFile,
   onSelectRenderer,
-  onSelectPreviewForm,
+  onSelectDifficulty,
   onStartRun,
 }) => {
   const { lang, setLang, t, format } = useI18n();
@@ -225,25 +230,33 @@ export const StartScreen: React.FC<StartScreenProps> = ({
           </div>
         </section>
 
-        {/* 3. Resonance Form Preview */}
+        {/* 3. Select Difficulty & Rhythm Speed */}
         <section className="menu-section">
-          <h2>{t.menu.formSection}</h2>
-          <div className="form-preview-tabs">
-            {(['bass', 'synth', 'treble'] as ResonanceFormType[]).map((f) => {
-              const cfg = FORM_CONFIG[f];
-              const text = t.forms[f];
-              const active = previewForm === f;
+          <h2>{t.menu.difficultySection}</h2>
+          <div className="difficulty-tabs" role="radiogroup" aria-label={t.menu.difficultySection}>
+            {(['easy', 'normal', 'hard'] as DifficultyMode[]).map((modeKey) => {
+              const accent = DIFFICULTY_ACCENTS[modeKey];
+              const info = t.difficulties[modeKey];
+              const active = difficulty === modeKey;
               return (
                 <button
-                  key={f}
+                  key={modeKey}
                   type="button"
-                  className={`form-tab ${active ? 'active' : ''}`}
-                  style={{ borderColor: active ? cfg.colorHex : undefined }}
-                  onClick={() => onSelectPreviewForm(f)}
+                  role="radio"
+                  aria-checked={active}
+                  data-difficulty={modeKey}
+                  className={`difficulty-tab ${active ? 'active' : ''}`}
+                  style={{
+                    borderColor: active ? accent : undefined,
+                    boxShadow: active ? `0 0 18px ${accent}33` : undefined,
+                  }}
+                  onClick={() => onSelectDifficulty(modeKey)}
                 >
-                  <strong style={{ color: cfg.colorHex }}>{text.name}</strong>
-                  <small>{text.band}</small>
-                  <span>{text.skillName}</span>
+                  <div className="difficulty-tab-header">
+                    <strong style={{ color: accent }}>{info.name}</strong>
+                    <small className="difficulty-speed-pill">{info.speed}</small>
+                  </div>
+                  <span>{info.desc}</span>
                 </button>
               );
             })}

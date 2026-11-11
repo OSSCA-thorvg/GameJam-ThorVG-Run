@@ -40,6 +40,13 @@ export const TrackLoadingModal: React.FC<TrackLoadingModalProps> = ({
     });
   }, [blueprint]);
 
+  const totalGimmicksAndPlatforms = blueprint
+    ? blueprint.skyPlatforms.length +
+      blueprint.jumpPads.length +
+      blueprint.dashRings.length +
+      blueprint.holdRails.length
+    : 0;
+
   return (
     <div className="loading-modal-backdrop" role="status" aria-live="polite">
       <div className="loading-modal-card">
@@ -95,14 +102,14 @@ export const TrackLoadingModal: React.FC<TrackLoadingModalProps> = ({
             </div>
             <div className="blueprint-stat">
               <small>{t.loading.stats.drops}</small>
-              <strong style={{ color: '#FF2A6D' }}>
-                {blueprint.sectionCounts.drop.toLocaleString()}
+              <strong style={{ color: '#FFE600' }}>
+                {totalGimmicksAndPlatforms.toLocaleString()}
               </strong>
             </div>
           </div>
         )}
 
-        {/* How to Surf Guide */}
+        {/* How to Run Guide */}
         <div className="loading-tip-box">
           <strong>{t.loading.tipTitle}</strong>
           <p>{t.loading.tipBody}</p>

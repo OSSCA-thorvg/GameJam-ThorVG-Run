@@ -1,6 +1,11 @@
 import React from 'react';
 import { useI18n } from '../i18n/I18nProvider';
-import { FORM_CONFIG, type HUDTelemetry, type RendererMode } from '../types/game';
+import {
+  FORM_CONFIG,
+  type HUDTelemetry,
+  type RendererMode,
+  type ResultRank,
+} from '../types/game';
 
 interface ResultModalProps {
   hud: HUDTelemetry;
@@ -9,6 +14,13 @@ interface ResultModalProps {
   onSwitchRendererAndReplay: (nextMode: RendererMode) => void;
   onReturnToMenu: () => void;
 }
+
+const RANK_COLORS: Record<ResultRank, string> = {
+  S: '#FFE600',
+  A: '#05D5FF',
+  B: '#34D399',
+  C: '#FF2A6D',
+};
 
 export const ResultModal: React.FC<ResultModalProps> = ({
   hud,
@@ -20,6 +32,10 @@ export const ResultModal: React.FC<ResultModalProps> = ({
   const { t, format } = useI18n();
   const formCfg = FORM_CONFIG[hud.activeForm];
   const nextMode: RendererMode = hud.rendererMode === 'sw' ? 'gl' : 'sw';
+  const rank: ResultRank = hud.rank ?? 'S';
+  const rankColor = RANK_COLORS[rank];
+  const accuracy = (hud.accuracy ?? 100).toFixed(1);
+  const counts = hud.judgmentCounts ?? { perfect: 0, great: 0, good: 0, miss: 0 };
 
   return (
     <div className="result-modal-backdrop">
@@ -30,6 +46,30 @@ export const ResultModal: React.FC<ResultModalProps> = ({
           {t.result.renderedVia}{' '}
           <strong>{hud.rendererMode === 'sw' ? t.result.cpuEngine : t.result.gpuEngine}</strong>
         </p>
+
+        {/* Hero Rank & Accuracy Showcase */}
+        <div className="result-rank-hero">
+          <div className="rank-emblem-box">
+            <small>{t.result.rank}</small>
+            <strong className="rank-emblem" style={{ color: rankColor }}>
+              {rank}
+            </strong>
+          </div>
+          <div className="rank-accuracy-box">
+            <small>{t.result.accuracy}</small>
+            <strong style={{ color: rankColor }}>
+              {format(t.result.accuracyValue, { value: accuracy })}
+            </strong>
+            <span className="judgment-breakdown-bar">
+              {format(t.result.judgmentBreakdown, {
+                perfect: counts.perfect,
+                great: counts.great,
+                good: counts.good,
+                miss: counts.miss,
+              })}
+            </span>
+          </div>
+        </div>
 
         <div className="result-stats-grid">
           <div className="stat-item">
@@ -53,7 +93,7 @@ export const ResultModal: React.FC<ResultModalProps> = ({
             <small>{t.result.dives}</small>
             <strong>{format(t.result.divesValue, { count: hud.divesCompleted })}</strong>
           </div>
-          <div className="stat-item">
+          <div className="stat-item stat-item-wide">
             <small>{t.result.traps}</small>
             <strong>{format(t.result.trapsValue, { count: hud.trapsDestroyed })}</strong>
           </div>

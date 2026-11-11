@@ -30,6 +30,8 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
   const surfSpeed = (hud.speedMultiplier ?? 1.0).toFixed(1);
   const orbsCollected = hud.orbsCollected ?? 0;
   const totalOrbs = hud.totalOrbs ?? 0;
+  const accuracyText = (hud.accuracy ?? 100).toFixed(1);
+  const diffMode = hud.difficulty ?? 'normal';
   const intensity = hud.sectionIntensity ?? 'groove';
   const sectionLabel =
     intensity === 'drop'
@@ -40,15 +42,18 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
 
   return (
     <div className="hud-overlay">
-      {/* Top-left: renderer badge, live FPS, zoom scale, surf speed, orbs, section */}
+      {/* Top-left: renderer badge, difficulty, live FPS, speed, accuracy, notes, section */}
       <div className="hud-top-left">
         <div className="hud-badge-row">
           <span className={`renderer-badge ${hud.rendererMode === 'gl' ? 'gpu' : 'cpu'}`}>
             {hud.rendererMode === 'sw' ? t.hud.modeCpu : t.hud.modeGpu}
           </span>
+          <span className={`diff-badge ${diffMode}`}>
+            {t.difficulties[diffMode].name}
+          </span>
           <span className="fps-badge">FPS: {hud.fps}</span>
-          <span className="zoom-badge">ZOOM: {hud.zoomDisplay.toFixed(1)}x</span>
           <span className="surf-badge">{format(t.hud.surfSpeed, { speed: surfSpeed })}</span>
+          <span className="acc-badge">{format(t.hud.accuracy, { value: accuracyText })}</span>
           <span className="orbs-badge">
             {format(t.hud.orbs, { collected: orbsCollected, total: totalOrbs })}
           </span>
@@ -56,6 +61,9 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
         <div className="hud-sub-status">
           <span>
             {t.hud.phase}: <strong>{t.phases[hud.phase]}</strong>
+          </span>
+          <span>
+            ZOOM: <strong>{hud.zoomDisplay.toFixed(1)}x</strong>
           </span>
           <span>
             {t.hud.audioFilter}: <strong>{t.filter[hud.acousticFilter]}</strong>
@@ -104,7 +112,23 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
         </div>
       </div>
 
-      {/* Center: dive / swap banner */}
+      {/* Real-time Floating Rhythm Timing Judgment Popup */}
+      {hud.judgment && (
+        <div
+          key={hud.judgment.id}
+          className={`hud-judgment-pop grade-${hud.judgment.grade.toLowerCase()}`}
+        >
+          <strong>{t.judgments[hud.judgment.grade]}</strong>
+          {hud.judgment.grade !== 'MISS' && (
+            <small>
+              +{hud.judgment.bonusScore}
+              {hud.judgment.deltaMs !== undefined ? ` · ±${hud.judgment.deltaMs}ms` : ''}
+            </small>
+          )}
+        </div>
+      )}
+
+      {/* Center: dive / swap / gimmick banner */}
       {hud.statusBanner && (
         <div className="hud-center-banner" style={{ borderColor: formCfg.colorHex }}>
           {resolveBanner(t, hud.statusBanner)}

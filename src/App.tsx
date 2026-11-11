@@ -11,15 +11,17 @@ import { trackTitle } from './i18n/display';
 import { useI18n } from './i18n/I18nProvider';
 import { ThorVGRenderer } from './renderer/ThorVGRenderer';
 import {
+  DIFFICULTY_CONFIG,
+  type DifficultyMode,
   type HUDTelemetry,
   type LoadingProgress,
   type RendererMode,
-  type ResonanceFormType,
   type TrackMetadata,
 } from './types/game';
 
 const INITIAL_HUD: HUDTelemetry = {
   rendererMode: 'sw',
+  difficulty: 'normal',
   fps: 60,
   phase: 'MACRO',
   zoomDisplay: 1.0,
@@ -34,11 +36,16 @@ const INITIAL_HUD: HUDTelemetry = {
   isFinished: false,
   trapsDestroyed: 0,
   divesCompleted: 0,
-  surfMomentum: 0.18,
+  surfMomentum: 0.25,
   speedMultiplier: 1.0,
   orbsCollected: 0,
   totalOrbs: 0,
   sectionIntensity: 'calm',
+  accuracy: 100,
+  rank: 'S',
+  judgment: null,
+  judgmentCounts: { perfect: 0, great: 0, good: 0, miss: 0 },
+  gimmicksTriggered: 0,
 };
 
 type Screen = 'splash' | 'menu' | 'loading' | 'game';
@@ -48,7 +55,7 @@ export const App: React.FC = () => {
   const [rendererMode, setRendererMode] = useState<RendererMode>('sw');
   const [selectedTrack, setSelectedTrack] = useState<TrackMetadata>(BUILT_IN_TRACKS[0]!);
   const [customTracks, setCustomTracks] = useState<TrackMetadata[]>([]);
-  const [previewForm, setPreviewForm] = useState<ResonanceFormType>('synth');
+  const [difficulty, setDifficulty] = useState<DifficultyMode>('normal');
   const [engineReady, setEngineReady] = useState<boolean>(false);
   /** Increments each time a renderer finishes init, so loops can restart on the new instance. */
   const [rendererEpoch, setRendererEpoch] = useState<number>(0);
@@ -64,9 +71,9 @@ export const App: React.FC = () => {
   const rendererRef = useRef<ThorVGRenderer | null>(null);
   const audioRef = useRef<AudioEngine | null>(null);
   const gameEngineRef = useRef<GameEngine | null>(null);
-  // Read inside loops without re-creating the WASM renderer.
-  const previewFormRef = useRef<ResonanceFormType>(previewForm);
-  previewFormRef.current = previewForm;
+  // Read inside preview loop without re-creating the WASM renderer.
+  const difficultyRef = useRef<DifficultyMode>(difficulty);
+  difficultyRef.current = difficulty;
   // The splash plays once per page load, even if the renderer is re-created later.
   const splashStartedRef = useRef<boolean>(false);
   const launchSeqRef = useRef<number>(0);
@@ -113,7 +120,6 @@ export const App: React.FC = () => {
       })
       .catch((err) => {
         console.error('ThorVG WASM Renderer initialization error:', err);
-        // Without a renderer there is nothing to play; go straight to the menu.
         splashStartedRef.current = true;
         setScreen((current) => (current === 'splash' ? 'menu' : current));
       });
@@ -127,7 +133,7 @@ export const App: React.FC = () => {
     };
   }, [rendererMode]);
 
-  // Menu / Loading background preview loop. In 'game' the GameEngine owns the frame loop instead.
+  // Menu / Loading background preview loop. Reflects selected difficulty speed live!
   useEffect(() => {
     const renderer = rendererRef.current;
     if ((screen !== 'menu' && screen !== 'loading') || !renderer?.ready) return;
@@ -135,7 +141,8 @@ export const App: React.FC = () => {
     let rafId = 0;
     const start = performance.now();
     const tick = (now: number) => {
-      renderer.renderPreviewFrame((now - start) / 1000, previewFormRef.current);
+      const speedPx = DIFFICULTY_CONFIG[difficultyRef.current].worldPxPerSec;
+      renderer.renderPreviewFrame((now - start) / 1000, 'synth', speedPx);
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
@@ -154,27 +161,29 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // Keyboard controls for Jump / Crest Launch / Phase Invert, Wave Dive & Pump, Form Skill, and Resonance Swap
+  // Keyboard controls for On-Beat Jump / Hold Rail, Fast Drop, Form Skill/Dash, and Resonance Swap
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (!inGame) return;
       if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
         e.preventDefault();
+        if (e.repeat) return;
         gameEngineRef.current?.handlePrimaryAction();
       } else if (e.code === 'ArrowDown' || e.code === 'KeyS') {
         e.preventDefault();
         gameEngineRef.current?.setDiveHeld(true);
       } else if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
         e.preventDefault();
+        if (e.repeat) return;
         gameEngineRef.current?.handleSecondaryAction();
       } else if (e.code === 'Digit1') {
-        gameEngineRef.current?.handleFormSwap('bass');
+        if (!e.repeat) gameEngineRef.current?.handleFormSwap('bass');
       } else if (e.code === 'Digit2') {
-        gameEngineRef.current?.handleFormSwap('synth');
+        if (!e.repeat) gameEngineRef.current?.handleFormSwap('synth');
       } else if (e.code === 'Digit3') {
-        gameEngineRef.current?.handleFormSwap('treble');
+        if (!e.repeat) gameEngineRef.current?.handleFormSwap('treble');
       } else if (e.code === 'KeyQ') {
-        gameEngineRef.current?.handleFormSwap();
+        if (!e.repeat) gameEngineRef.current?.handleFormSwap();
       } else if (e.code === 'Escape') {
         gameEngineRef.current?.stopRun();
         setScreen('menu');
@@ -182,24 +191,41 @@ export const App: React.FC = () => {
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'ArrowDown' || e.code === 'KeyS') {
+      if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
+        gameEngineRef.current?.setJumpHeld(false);
+      } else if (e.code === 'ArrowDown' || e.code === 'KeyS') {
         gameEngineRef.current?.setDiveHeld(false);
       }
     };
 
+    const onBlur = () => {
+      gameEngineRef.current?.setJumpHeld(false);
+      gameEngineRef.current?.setDiveHeld(false);
+    };
+
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
     };
   }, [inGame]);
 
-  const handleUploadFile = useCallback(async (file: File, supportedFormats: readonly AudioFormat[]) => {
-    if (!audioRef.current) return;
-    const decodedTrack = await audioRef.current.decodeLocalFile(file, supportedFormats);
-    setCustomTracks((prev) => [decodedTrack, ...prev]);
-    setSelectedTrack(decodedTrack);
+  const handleUploadFile = useCallback(
+    async (file: File, supportedFormats: readonly AudioFormat[]) => {
+      if (!audioRef.current) return;
+      const decodedTrack = await audioRef.current.decodeLocalFile(file, supportedFormats);
+      setCustomTracks((prev) => [decodedTrack, ...prev]);
+      setSelectedTrack(decodedTrack);
+    },
+    []
+  );
+
+  const handleSelectDifficulty = useCallback((nextDiff: DifficultyMode) => {
+    setDifficulty(nextDiff);
+    gameEngineRef.current?.setDifficulty(nextDiff);
   }, []);
 
   const handleStartRun = useCallback(() => {
@@ -210,6 +236,7 @@ export const App: React.FC = () => {
     setHud((prev) => ({
       ...INITIAL_HUD,
       rendererMode,
+      difficulty,
       activeForm: prev.activeForm,
     }));
     setLoadingState({ progress: 0.06, stage: 'decoding' });
@@ -217,11 +244,15 @@ export const App: React.FC = () => {
 
     void (async () => {
       try {
-        const blueprint = await engine.prepareRun(selectedTrack, (status) => {
-          if (launchSeqRef.current === seq) {
-            setLoadingState(status);
-          }
-        });
+        const blueprint = await engine.prepareRun(
+          selectedTrack,
+          (status) => {
+            if (launchSeqRef.current === seq) {
+              setLoadingState(status);
+            }
+          },
+          difficulty
+        );
         if (launchSeqRef.current !== seq) return;
         setLoadingState({ progress: 1.0, stage: 'ready', blueprint });
 
@@ -230,7 +261,7 @@ export const App: React.FC = () => {
         if (launchSeqRef.current !== seq) return;
 
         setScreen('game');
-        await engine.startRun(selectedTrack);
+        await engine.startRun(selectedTrack, undefined, difficulty);
       } catch (err) {
         console.error('Track blueprint preparation failed:', err);
         if (launchSeqRef.current === seq) {
@@ -238,7 +269,7 @@ export const App: React.FC = () => {
         }
       }
     })();
-  }, [rendererMode, selectedTrack]);
+  }, [difficulty, rendererMode, selectedTrack]);
 
   const handleReturnToMenu = useCallback(() => {
     launchSeqRef.current++;
@@ -262,7 +293,6 @@ export const App: React.FC = () => {
       className="app-shell"
       onMouseDown={(e) => {
         if (!inGame || hud.isFinished) return;
-        // Ignore clicks on HUD buttons
         if ((e.target as HTMLElement).closest('button')) return;
         if (e.button === 0) {
           gameEngineRef.current?.handlePrimaryAction();
@@ -270,29 +300,29 @@ export const App: React.FC = () => {
           gameEngineRef.current?.handleSecondaryAction();
         }
       }}
+      onMouseUp={(e) => {
+        if (e.button === 0) {
+          gameEngineRef.current?.setJumpHeld(false);
+        }
+      }}
       onContextMenu={(e) => {
         if (inGame) e.preventDefault();
       }}
     >
       {/* Keyed by rendererMode so React cleanly replaces DOM <canvas> on CPU <-> GPU switch */}
-      <canvas
-        key={rendererMode}
-        ref={canvasRef}
-        id="tvg-canvas"
-        className="tvg-canvas"
-      />
+      <canvas key={rendererMode} ref={canvasRef} id="tvg-canvas" className="tvg-canvas" />
 
       {screen === 'menu' && (
         <StartScreen
           selectedTrack={selectedTrack}
           customTracks={customTracks}
           rendererMode={rendererMode}
-          previewForm={previewForm}
+          difficulty={difficulty}
           engineReady={engineReady}
           onSelectTrack={setSelectedTrack}
           onUploadFile={handleUploadFile}
           onSelectRenderer={setRendererMode}
-          onSelectPreviewForm={setPreviewForm}
+          onSelectDifficulty={handleSelectDifficulty}
           onStartRun={handleStartRun}
         />
       )}
