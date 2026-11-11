@@ -6,6 +6,14 @@ export type ResonanceFormType = 'bass' | 'synth' | 'treble';
 
 export type DifficultyMode = 'easy' | 'normal' | 'hard';
 
+/**
+ * Live-switchable Procedural Sound Effect Mode:
+ * - 'full' (Option 1, Default): Form-linked harmonic note chimes + action/gimmick/impact SFX
+ * - 'impact' (Option 2): Skips ordinary note chimes to preserve 100% pure song audio; plays gimmick/shatter/overdrive/miss SFX only
+ * - 'off': Mutes all procedural SFX
+ */
+export type SfxMode = 'full' | 'impact' | 'off';
+
 export type JudgmentGrade = 'PERFECT' | 'GREAT' | 'GOOD' | 'MISS';
 
 export type ResultRank = 'S' | 'A' | 'B' | 'C';
@@ -79,6 +87,16 @@ export interface TrackMetadata {
   assetUrl?: string;
 }
 
+export interface TrackRecord {
+  bestScore: number;
+  bestRank: ResultRank;
+  bestAccuracy: number;
+  maxCombo: number;
+  bestStars: number;
+  noMissCleared: boolean;
+  clearCount: number;
+}
+
 export interface AudioSlice {
   index: number;
   timeSec: number;
@@ -130,6 +148,8 @@ export interface ResonanceOrb {
   timeSec?: number;
   /** True when this note is a primary on-beat target displaying a shrinking timing ring. */
   isBeatTarget?: boolean;
+  /** True for the 3 high-risk/high-route collectible Harmonic Prism Stars per track. */
+  isPrismStar?: boolean;
 }
 
 export interface SkyPlatform {
@@ -148,6 +168,8 @@ export interface JumpPad {
   screenY?: number;
   timeSec: number;
   triggered: boolean;
+  /** 'slam' = SlamPad rewarding airborne Fast-Drop (S/Down) with shockwave & super bounce. */
+  kind?: 'jump' | 'slam';
 }
 
 export interface DashRing {
@@ -175,6 +197,8 @@ export interface JudgmentFeedback {
   id: number;
   grade: JudgmentGrade;
   deltaMs?: number;
+  /** Signed timing offset in ms: negative = FAST (early), positive = SLOW (late). */
+  signedDeltaMs?: number;
   bonusScore: number;
 }
 
@@ -204,6 +228,7 @@ export interface TrackBlueprint {
   holdRails: HoldRail[];
   sectionCounts: Record<SectionIntensity, number>;
   totalBeats: number;
+  totalStars?: number;
 }
 
 export interface LoadingProgress {
@@ -220,6 +245,9 @@ export interface BeatTrap {
   destroyed: boolean;
   passed: boolean;
   timeSec?: number;
+  /** True when floating mid-air as a BeatDrone hazard (damages on contact unless shattered via Shift Dash/Skill or Overdrive). */
+  isAerialDrone?: boolean;
+  droneWorldY?: number;
 }
 
 export interface DivingNode {
@@ -275,6 +303,11 @@ export interface RenderFrameState {
   audioSec?: number;
   worldPxPerSec?: number;
   beatPulse?: number;
+  combo?: number;
+  overdriveActive?: boolean;
+  overdriveRatio?: number;
+  shakeX?: number;
+  shakeY?: number;
   phase: GamePhase;
   zoomScale: number;          // 1.0x -> 50.0x (with Origin Rebasing)
   rebasedZoomDisplay: number; // Effective HUD display scale (e.g. 1.0x ~ 64.0x)
@@ -315,6 +348,7 @@ export interface RenderFrameState {
 export interface HUDTelemetry {
   rendererMode: RendererMode;
   difficulty?: DifficultyMode;
+  sfxMode?: SfxMode;
   fps: number;
   phase: GamePhase;
   zoomDisplay: number;
@@ -324,6 +358,9 @@ export interface HUDTelemetry {
   progress: number; // 0.0 ~ 1.0
   activeForm: ResonanceFormType;
   resonanceGauge: number; // 0 ~ 100
+  microSyncProgress?: number; // 0 ~ 100 during MICRO tunnel
+  overdriveReady?: boolean;
+  overdriveActive?: boolean;
   acousticFilter: AcousticZoomMode;
   statusBanner: BannerMessage | null;
   isFinished: boolean;
@@ -333,12 +370,16 @@ export interface HUDTelemetry {
   speedMultiplier?: number; // 1.0 ~ 2.4
   orbsCollected?: number;
   totalOrbs?: number;
+  starsCollected?: number;
+  totalStars?: number;
   sectionIntensity?: SectionIntensity;
   accuracy?: number; // 0 ~ 100
   rank?: ResultRank;
   judgment?: JudgmentFeedback | null;
   judgmentCounts?: JudgmentCounts;
   gimmicksTriggered?: number;
+  isNewRecord?: boolean;
+  scoreDelta?: number;
 }
 
 /** Acoustic Zoom filter state. 'macro' = full spectrum, otherwise the isolated band. */

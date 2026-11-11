@@ -1,4 +1,5 @@
-import type { AcousticZoomMode, FrequencyBands, TrackMetadata } from '../types/game';
+import type { AcousticZoomMode, FrequencyBands, SfxMode, TrackMetadata } from '../types/game';
+import { loadSfxMode, saveSfxMode } from '../engine/recordsStore';
 import {
   AudioLoadError,
   MAX_UPLOAD_BYTES,
@@ -8,12 +9,15 @@ import {
   type AudioFormat,
 } from './audioFormats';
 import { BUILT_IN_TRACKS, createFallbackBuffer } from './proceduralTracks';
+import { SfxSynth } from './SfxSynth';
 
 /**
  * Web Audio API Engine for ThorVG Run.
  * Pipeline: AudioBufferSourceNode -> BiquadFilterNode (Acoustic Zoom) -> AnalyserNode -> GainNode -> Destination
  */
 export class AudioEngine {
+  public readonly sfx: SfxSynth = new SfxSynth();
+
   private ctx: AudioContext | null = null;
   private sourceNode: AudioBufferSourceNode | null = null;
   private filterNode: BiquadFilterNode | null = null;
@@ -32,10 +36,24 @@ export class AudioEngine {
   private rollingLowAvg: number = 0.25;
   private currentZoomMode: AcousticZoomMode = 'macro';
 
+  constructor() {
+    this.sfx.setMode(loadSfxMode());
+  }
+
+  public setSfxMode(mode: SfxMode): void {
+    this.sfx.setMode(mode);
+    saveSfxMode(mode);
+  }
+
+  public getSfxMode(): SfxMode {
+    return this.sfx.getMode();
+  }
+
   private ensureContext(): AudioContext {
     if (!this.ctx) {
       const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.ctx = new AudioCtx();
+      this.sfx.attachContext(this.ctx);
 
       this.filterNode = this.ctx.createBiquadFilter();
       this.filterNode.type = 'lowpass';
