@@ -17,6 +17,7 @@ export class ScoreJudgeSystem {
   public combo: number = 1;
   public maxCombo: number = 1;
   public orbsCollected: number = 0;
+  public starsCollected: number = 0;
   public trapsDestroyed: number = 0;
   public divesCompleted: number = 0;
   public gimmicksTriggered: number = 0;
@@ -32,6 +33,7 @@ export class ScoreJudgeSystem {
     this.combo = 1;
     this.maxCombo = 1;
     this.orbsCollected = 0;
+    this.starsCollected = 0;
     this.trapsDestroyed = 0;
     this.divesCompleted = 0;
     this.gimmicksTriggered = 0;
@@ -68,15 +70,21 @@ export class ScoreJudgeSystem {
     this.score += points;
   }
 
-  public addHoldRailTick(): void {
-    this.combo = Math.min(99, this.combo + 1);
+  public addHoldRailTick(scoreMultiplier: number = 1): void {
+    this.combo += 1;
     this.maxCombo = Math.max(this.maxCombo, this.combo);
-    this.score += 85 * this.combo;
+    const effectiveCombo = Math.min(250, this.combo);
+    this.score += Math.round(85 * effectiveCombo * scoreMultiplier);
     this.dirty = true;
   }
 
   public recordOrbCollected(): void {
     this.orbsCollected++;
+    this.dirty = true;
+  }
+
+  public recordStarCollected(): void {
+    this.starsCollected++;
     this.dirty = true;
   }
 
@@ -98,43 +106,57 @@ export class ScoreJudgeSystem {
   public recordJudgment(
     grade: JudgmentGrade,
     deltaMs?: number,
-    basePoints: number = 220
+    basePoints: number = 220,
+    scoreMultiplier: number = 1,
+    signedDeltaMs?: number
   ): number {
     let bonusPoints = 0;
 
     if (grade === 'PERFECT') {
       this.judgmentCounts.perfect++;
-      this.combo = Math.min(99, this.combo + 2);
-      bonusPoints = Math.round(basePoints * 1.5 * Math.max(1, this.combo * 0.25));
+      this.combo += 2;
+      const effectiveCombo = Math.min(300, this.combo);
+      bonusPoints = Math.round(
+        basePoints * 1.5 * Math.max(1, effectiveCombo * 0.25) * scoreMultiplier
+      );
       this.score += bonusPoints;
       this.activeJudgment = {
         id: this.nextJudgmentId++,
         grade,
         deltaMs,
+        signedDeltaMs,
         bonusScore: bonusPoints,
       };
       this.judgmentTimer = 0.72;
     } else if (grade === 'GREAT') {
       this.judgmentCounts.great++;
-      this.combo = Math.min(99, this.combo + 1);
-      bonusPoints = Math.round(basePoints * 1.15 * Math.max(1, this.combo * 0.22));
+      this.combo += 1;
+      const effectiveCombo = Math.min(300, this.combo);
+      bonusPoints = Math.round(
+        basePoints * 1.15 * Math.max(1, effectiveCombo * 0.22) * scoreMultiplier
+      );
       this.score += bonusPoints;
       this.activeJudgment = {
         id: this.nextJudgmentId++,
         grade,
         deltaMs,
+        signedDeltaMs,
         bonusScore: bonusPoints,
       };
       this.judgmentTimer = 0.65;
     } else if (grade === 'GOOD') {
       this.judgmentCounts.good++;
-      this.combo = Math.min(99, this.combo + 1);
-      bonusPoints = Math.round(basePoints * 0.8 * Math.max(1, this.combo * 0.18));
+      this.combo += 1;
+      const effectiveCombo = Math.min(300, this.combo);
+      bonusPoints = Math.round(
+        basePoints * 0.8 * Math.max(1, effectiveCombo * 0.18) * scoreMultiplier
+      );
       this.score += bonusPoints;
       this.activeJudgment = {
         id: this.nextJudgmentId++,
         grade,
         deltaMs,
+        signedDeltaMs,
         bonusScore: bonusPoints,
       };
       this.judgmentTimer = 0.55;

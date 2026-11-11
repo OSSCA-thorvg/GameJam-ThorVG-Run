@@ -394,6 +394,8 @@ export interface BannerMessage {
   params?: {
     form?: ResonanceFormType;
     count?: number;
+    collected?: number;
+    total?: number;
   };
 }
 

@@ -8,6 +8,8 @@ export interface GameInputCommands {
   onDiveHoldChange: (held: boolean) => void;
   onSecondaryPress: () => void;
   onSwapForm: (targetForm?: ResonanceFormType) => void;
+  onActivateOverdrive?: () => void;
+  onCycleSfxMode?: () => void;
   onPauseOrExit: () => void;
 }
 
@@ -46,6 +48,13 @@ export class InputController {
         if (!e.repeat) this.commands.onSwapForm('treble');
       } else if (e.code === 'KeyQ') {
         if (!e.repeat) this.commands.onSwapForm();
+      } else if (e.code === 'KeyE' || e.code === 'Enter') {
+        if (!e.repeat) {
+          e.preventDefault();
+          this.commands.onActivateOverdrive?.();
+        }
+      } else if (e.code === 'KeyM') {
+        if (!e.repeat) this.commands.onCycleSfxMode?.();
       } else if (e.code === 'Escape') {
         this.commands.onPauseOrExit();
       }
