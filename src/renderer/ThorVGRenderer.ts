@@ -9,9 +9,11 @@ import wasmUrl from '@thorvg/webcanvas/dist/thorvg.wasm?url';
 import splashLottie from '../logo/powred.by.thorvg.1.json?raw';
 import crewmateLottie from '../asset/Loading 50 _ Among Us.json?raw';
 import { buildCharacterMatrix } from './characterMatrix';
+import { prepareSplashLottie } from './splashLottie';
 import {
   FORM_CONFIG,
   type BeatTrap,
+  type BezierSegment,
   type RendererMode,
   type ResonanceFormType,
   type RenderFrameState,
@@ -35,6 +37,9 @@ interface ContentBox {
   width: number;
   height: number;
 }
+
+/** Splash core logo fits within 60% of the viewport, leaving ample breathing room for lightning bolts. */
+const SPLASH_VIEWPORT_FIT = 0.6;
 
 /** The crewmate Lottie composition is 500x500. */
 const CREW_SOURCE_SIZE = 500;
@@ -66,6 +71,9 @@ export class ThorVGRenderer {
   private spectrumShape: TvgShape | null = null;
   private waveGlowShape: TvgShape | null = null;
   private waveCoreShape: TvgShape | null = null;
+  private platformsShape: TvgShape | null = null;
+  private gimmicksShape: TvgShape | null = null;
+  private timingRingsShape: TvgShape | null = null;
   private orbsShape: TvgShape | null = null;
   private trapsShape: TvgShape | null = null;
   private portalsShape: TvgShape | null = null;
@@ -86,6 +94,10 @@ export class ThorVGRenderer {
   private splashAnim: TvgAnimation | null = null;
   private splashInfo: AnimationInfo | null = null;
   private splashActive: boolean = false;
+  private splashWidth: number = 1920;
+  private splashHeight: number = 1080;
+  private splashCoreWidth: number = 1920;
+  private splashCoreHeight: number = 1080;
 
   // Main character: Among Us crewmate run-cycle Lottie (falls back to the form polygon).
   private crewAnim: TvgAnimation | null = null;
@@ -132,6 +144,9 @@ export class ThorVGRenderer {
       this.spectrumShape = new TVG.Shape();
       this.waveGlowShape = new TVG.Shape();
       this.waveCoreShape = new TVG.Shape();
+      this.platformsShape = new TVG.Shape();
+      this.gimmicksShape = new TVG.Shape();
+      this.timingRingsShape = new TVG.Shape();
       this.orbsShape = new TVG.Shape();
       this.trapsShape = new TVG.Shape();
       this.portalsShape = new TVG.Shape();
@@ -146,6 +161,9 @@ export class ThorVGRenderer {
         this.spectrumShape,
         this.waveGlowShape,
         this.waveCoreShape,
+        this.platformsShape,
+        this.gimmicksShape,
+        this.timingRingsShape,
         this.orbsShape,
         this.trapsShape,
         this.portalsShape,
@@ -162,6 +180,9 @@ export class ThorVGRenderer {
         .add(this.spectrumShape)
         .add(this.waveGlowShape)
         .add(this.waveCoreShape)
+        .add(this.platformsShape)
+        .add(this.gimmicksShape)
+        .add(this.timingRingsShape)
         .add(this.orbsShape)
         .add(this.trapsShape)
         .add(this.portalsShape)
@@ -178,12 +199,18 @@ export class ThorVGRenderer {
     });
   }
 
-  /** Loads the splash Lottie. On failure the splash is skipped (playSplash resolves at once). */
+  /** Loads the unclipped splash Lottie. On failure the splash is skipped (playSplash resolves at once). */
   private loadSplash(TVG: ThorVGNamespace): void {
     try {
+      const prepared = prepareSplashLottie(splashLottie);
+      this.splashWidth = prepared.width;
+      this.splashHeight = prepared.height;
+      this.splashCoreWidth = prepared.coreWidth;
+      this.splashCoreHeight = prepared.coreHeight;
+
       const anim = new TVG.Animation();
       this.ownedObjects.push(anim);
-      anim.load(splashLottie);
+      anim.load(prepared.json);
       const info = anim.info();
       const picture = anim.picture;
       if (!info || info.totalFrames <= 0 || !picture) {
@@ -257,15 +284,20 @@ export class ThorVGRenderer {
     this.crewAnim?.picture?.visible(false);
   }
 
-  /** Fits the 16:9 splash into the viewport (contain) and centers it. */
+  /**
+   * Fits the core 1920x1080 splash composition to 60% of the viewport (`SPLASH_VIEWPORT_FIT`)
+   * while rendering the expanded unclipped bounds centered seamlessly on the black canvas.
+   */
   private layoutSplash(): void {
     const picture = this.splashAnim?.picture;
     if (!picture) return;
-    const srcW = 1920;
-    const srcH = 1080;
-    const scale = Math.min(this.width / srcW, this.height / srcH);
-    picture.size(srcW * scale, srcH * scale);
-    picture.translate((this.width - srcW * scale) / 2, (this.height - srcH * scale) / 2);
+    const coreScale =
+      Math.min(this.width / this.splashCoreWidth, this.height / this.splashCoreHeight) *
+      SPLASH_VIEWPORT_FIT;
+    const drawW = this.splashWidth * coreScale;
+    const drawH = this.splashHeight * coreScale;
+    picture.size(drawW, drawH);
+    picture.translate((this.width - drawW) / 2, (this.height - drawH) / 2);
   }
 
   /** Clears every gameplay layer, leaving a black background that matches the splash Lottie. */
@@ -277,6 +309,9 @@ export class ThorVGRenderer {
       this.spectrumShape,
       this.waveGlowShape,
       this.waveCoreShape,
+      this.platformsShape,
+      this.gimmicksShape,
+      this.timingRingsShape,
       this.orbsShape,
       this.trapsShape,
       this.portalsShape,
@@ -365,76 +400,127 @@ export class ThorVGRenderer {
   }
 
   /**
-   * Renders an animated vector preview for the Start Menu / Renderer Verification.
+   * Renders an animated Hybrid Rhythm-Runner vector preview for the Start Menu,
+   * reflecting the selected difficulty's scroll speed in real time.
    */
-  public renderPreviewFrame(timeSec: number, previewForm: ResonanceFormType = 'synth'): void {
+  public renderPreviewFrame(
+    timeSec: number,
+    previewForm: ResonanceFormType = 'synth',
+    previewSpeedPxPerSec: number = 550
+  ): void {
     if (!this.canvas || !this.tvg || this.disposed) return;
     const { width, height } = this;
     const formCfg = FORM_CONFIG[previewForm];
     const [r, g, b] = formCfg.rgb;
+    const [sr, sg, sb] = formCfg.secondaryRgb;
 
     // 1. Deep cyber background
     this.bgShape!.reset().appendRect(0, 0, width, height).fill(9, 11, 22, 255);
 
-    // 2. Perspective neon grid
+    // 2. Fast-scrolling neon rhythm grid
     this.gridShape!.reset();
-    const gridSpacing = 64;
-    const scrollOffset = (timeSec * 120) % gridSpacing;
+    const gridSpacing = 72;
+    const scrollPx = timeSec * previewSpeedPxPerSec;
+    const scrollOffset = scrollPx % gridSpacing;
     for (let x = -scrollOffset; x <= width; x += gridSpacing) {
       this.gridShape!.moveTo(x, 0).lineTo(x, height);
     }
     for (let y = 80; y < height; y += gridSpacing) {
       this.gridShape!.moveTo(0, y).lineTo(width, y);
     }
-    this.gridShape!.stroke({ width: 1, color: [35, 55, 95, 110] });
+    this.gridShape!.stroke({ width: 1, color: [35, 55, 95, 105] });
 
-    // 3. Animated Cubic Bezier Audio Waveform & Sub-Wave Spectrum Bars
-    const baseFloorY = height * 0.66;
-    const segCount = 8;
-    const segWidth = width / segCount;
+    // 3. Flat Stepped Sprint Decks + Sample 2F Sky Platform + Shrinking Timing Rings
+    const baseFloorY = height * 0.7;
+    const tileW = 240;
+    const firstTile = Math.floor(scrollPx / tileW) - 1;
+    const tileCount = Math.ceil(width / tileW) + 3;
 
-    this.waveFillShape!.reset().moveTo(0, height).lineTo(0, baseFloorY);
+    this.waveFillShape!.reset();
     this.spectrumShape!.reset();
-    this.waveGlowShape!.reset().moveTo(0, baseFloorY);
-    this.waveCoreShape!.reset().moveTo(0, baseFloorY);
+    this.waveGlowShape!.reset();
+    this.waveCoreShape!.reset();
+    this.platformsShape!.reset();
+    this.gimmicksShape!.reset();
+    this.timingRingsShape!.reset();
     this.orbsShape!.reset();
 
-    let prevY = baseFloorY;
-    for (let i = 0; i < segCount; i++) {
-      const x0 = i * segWidth;
-      const x1 = (i + 1) * segWidth;
-      const amp1 = Math.sin(timeSec * 3.4 + i * 1.3) * 68;
-      const amp2 = Math.cos(timeSec * 2.8 + (i + 1) * 1.1) * 68;
-      const y1 = baseFloorY + Math.sin(timeSec * 2.4 + (i + 1) * 1.1) * 56;
+    let hasPlatforms = false;
+    let hasGimmicks = false;
+    let hasRings = false;
 
-      const cx1 = x0 + segWidth * 0.35;
-      const cy1 = prevY + amp1;
-      const cx2 = x0 + segWidth * 0.65;
-      const cy2 = y1 + amp2;
+    for (let i = 0; i < tileCount; i++) {
+      const tileIdx = firstTile + i;
+      const x0 = tileIdx * tileW - scrollPx;
+      const x1 = x0 + tileW;
+      const mod = ((tileIdx % 7) + 7) % 7;
+      const isGap = mod === 5;
+      const deckStep = mod === 2 || mod === 3 ? -36 : 0;
+      const y = baseFloorY + deckStep;
 
-      this.waveFillShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
-      this.waveGlowShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
-      this.waveCoreShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
+      if (!isGap) {
+        this.waveFillShape!
+          .moveTo(x0, height)
+          .lineTo(x0, y)
+          .lineTo(x1, y)
+          .lineTo(x1, height)
+          .close();
+        this.waveGlowShape!.moveTo(x0, y).lineTo(x1, y);
+        this.waveCoreShape!.moveTo(x0, y).lineTo(x1, y);
 
-      // Sub-wave spectrum bars
-      const barW = Math.max(6, segWidth * 0.24);
-      const midWaveY = (prevY + y1) * 0.5 + 16;
-      const barH = Math.max(24, (height - midWaveY) * (0.45 + 0.35 * Math.sin(timeSec * 4 + i)));
-      this.spectrumShape!.appendRect(x0 + segWidth * 0.38, height - barH, barW, barH, { rx: 3, ry: 3 });
+        // Equalizer bars beneath solid sprint deck
+        for (let b = 0; b < 3; b++) {
+          const barW = tileW * 0.18;
+          const bx = x0 + (b + 0.25) * (tileW / 3);
+          const pulse = 0.35 + 0.45 * Math.abs(Math.sin(timeSec * 5.2 + tileIdx * 0.9 + b));
+          const barH = Math.max(20, (height - y - 16) * pulse);
+          this.spectrumShape!.appendRect(bx, height - barH, barW, barH, { rx: 2, ry: 2 });
+        }
 
-      // Preview rhythm orbs along the wave
-      const orbX = (x0 + x1) * 0.5;
-      const orbY = (prevY + y1) * 0.5 - 30;
-      this.orbsShape!.appendCircle(orbX, orbY, 7, 7);
+        // Beat Note + Shrinking Timing Ring
+        const orbX = (x0 + x1) * 0.5;
+        const orbY = y - 34;
+        this.orbsShape!.appendCircle(orbX, orbY, 8.5, 8.5);
+        if (orbX > width * 0.24 && orbX < width * 0.85) {
+          const shrinkRatio = Math.max(0, Math.min(1, (orbX - width * 0.24) / (width * 0.55)));
+          const ringR = 8.5 * (1.15 + shrinkRatio * 1.85);
+          this.timingRingsShape!.appendCircle(orbX, orbY, ringR, ringR);
+          hasRings = true;
+        }
+      }
 
-      prevY = y1;
+      // Preview 2F Sky Platform & JumpPad before the chasm
+      if (mod === 4) {
+        const padX = x1 - 36;
+        this.gimmicksShape!.appendRect(padX - 18, y - 9, 36, 9, { rx: 3, ry: 3 });
+        hasGimmicks = true;
+      }
+      if (mod === 5) {
+        const skyY = baseFloorY - 122;
+        this.platformsShape!.appendRect(x0 - 20, skyY, tileW + 40, 10, { rx: 4, ry: 4 });
+        this.orbsShape!.appendCircle((x0 + x1) * 0.5, skyY - 30, 9, 9);
+        hasPlatforms = true;
+      }
     }
 
-    this.waveFillShape!.lineTo(width, height).close().fill(r, g, b, 36);
+    this.waveFillShape!.fill(r, g, b, 38);
     this.spectrumShape!.fill(r, g, b, 68);
-    this.waveGlowShape!.stroke({ width: 10, color: [r, g, b, 92] });
-    this.waveCoreShape!.stroke({ width: 3.5, color: [255, 255, 255, 240] });
-    this.orbsShape!.fill(r, g, b, 210).stroke({ width: 2, color: [255, 255, 255, 240] });
+    this.waveGlowShape!.stroke({ width: 9, color: [r, g, b, 95] });
+    this.waveCoreShape!.stroke({ width: 3.4, color: [255, 255, 255, 242] });
+    if (hasPlatforms) {
+      this.platformsShape!
+        .fill(sr, sg, sb, 155)
+        .stroke({ width: 2.2, color: [255, 255, 255, 235] });
+    }
+    if (hasGimmicks) {
+      this.gimmicksShape!
+        .fill(255, 224, 65, 200)
+        .stroke({ width: 2.2, color: [255, 250, 190, 245] });
+    }
+    if (hasRings) {
+      this.timingRingsShape!.stroke({ width: 2, color: [255, 238, 120, 205] });
+    }
+    this.orbsShape!.fill(sr, sg, sb, 225).stroke({ width: 2, color: [255, 255, 255, 245] });
 
     // Clear unused gameplay shapes in preview
     this.trapsShape!.reset();
@@ -442,14 +528,22 @@ export class ThorVGRenderer {
     this.effectsShape!.reset();
     this.particlesShape!.reset();
 
-    // 4. Preview Resonance Polygon Character
-    const playerX = width * 0.25;
-    const playerY = baseFloorY - 48 + Math.sin(timeSec * 4.5) * 14;
+    // 4. Preview Sprinting Crewmate at the 24% hit-line
+    const playerX = width * 0.24;
+    const playerTile = Math.floor((scrollPx + playerX) / tileW);
+    const playerMod = ((playerTile % 7) + 7) % 7;
+    const hopOffset =
+      playerMod === 5 ? -135 : playerMod === 2 || playerMod === 3 ? -36 : 0;
+    const playerY = baseFloorY + hopOffset - 22;
+    const runCycle = timeSec * (previewSpeedPxPerSec / 460);
+
     if (this.crewAnim) {
-      this.drawPlayerPolygon(playerX, playerY, 26, timeSec * 1.2, previewForm, 1.0, true);
-      this.drawCrewmate(playerX, playerY - 26 * 0.3, 26 * CREW_HEIGHT_RATIO, 0, 1, timeSec, 255);
+      const heightPx = 24 * CREW_HEIGHT_RATIO;
+      const cy = playerY + 24 - heightPx / 2;
+      this.drawPlayerPolygon(playerX, cy, 24, 0, previewForm, 1.0, true);
+      this.drawCrewmate(playerX, cy, heightPx, 0, 1, runCycle, 255);
     } else {
-      this.drawPlayerPolygon(playerX, playerY, 26, timeSec * 1.2, previewForm, 1.0);
+      this.drawPlayerPolygon(playerX, playerY, 24, timeSec * 1.2, previewForm, 1.0);
     }
 
     this.canvas.update().render();
@@ -465,7 +559,7 @@ export class ThorVGRenderer {
     const formCfg = FORM_CONFIG[activeForm];
     const [fr, fg, fb] = formCfg.rgb;
 
-    // Transform helper for Infinite Zoom around the focal point (Origin Rebasing aware)
+    // Transform helper for Infinite Zoom / Beat Camera Zoom Punch around the focal point
     const zoom = state.zoomScale;
     const fx = state.focalScreenX;
     const fy = state.focalScreenY;
@@ -473,8 +567,8 @@ export class ThorVGRenderer {
     const ty = (y: number) => (zoom === 1 ? y : fy + (y - fy) * zoom);
     const ts = (s: number) => s * Math.min(zoom, 8);
 
-    // 1. Background
-    const bgPulse = Math.floor(frequency.low * 24);
+    // 1. Background (pulses subtly with beatPulse + bass energy)
+    const pulseBoost = Math.floor((frequency.low * 0.6 + (state.beatPulse ?? 0) * 0.5) * 28);
     if (phase === 'MICRO') {
       const [mr, mg, mb] = FORM_CONFIG[state.divingTargetForm].rgb;
       this.bgShape!
@@ -490,13 +584,18 @@ export class ThorVGRenderer {
       this.bgShape!
         .reset()
         .appendRect(0, 0, width, height)
-        .fill(7 + Math.floor(bgPulse * 0.5), 9 + Math.floor(bgPulse * 0.3), 20 + bgPulse, 255);
+        .fill(
+          7 + Math.floor(pulseBoost * 0.5),
+          9 + Math.floor(pulseBoost * 0.3),
+          20 + pulseBoost,
+          255
+        );
     }
 
-    // 2. Dynamic Grid & Frequency Pillars
+    // 2. Dynamic Speed Grid & Beat Hit-Line Guide
     this.gridShape!.reset();
     const gridStep = 80;
-    const offsetX = -(state.cameraX % gridStep);
+    const offsetX = -(((state.cameraX % gridStep) + gridStep) % gridStep);
     for (let x = offsetX; x <= width; x += gridStep) {
       const sx = tx(x);
       if (sx >= -20 && sx <= width + 20) {
@@ -511,7 +610,7 @@ export class ThorVGRenderer {
     }
     this.gridShape!.stroke({
       width: 1,
-      color: phase === 'MICRO' ? [fr, fg, fb, 65] : [40, 65, 110, 85],
+      color: phase === 'MICRO' ? [fr, fg, fb, 65] : [40, 65, 110, 82],
     });
 
     if (phase === 'MICRO') {
@@ -520,7 +619,7 @@ export class ThorVGRenderer {
       this.renderMacroWorld(state, tx, ty, ts);
     }
 
-    // 3. Render Shockwaves, Afterimage Effects & High-Speed Surf Lines
+    // 3. Render Shockwaves, Afterimage Effects & High-Speed Sprint Lines
     this.effectsShape!.reset();
     let hasEffects = false;
     for (const sw of state.shockwaves) {
@@ -528,17 +627,25 @@ export class ThorVGRenderer {
       hasEffects = true;
     }
     for (const ai of state.afterimages) {
-      this.appendPolygonPath(this.effectsShape!, tx(ai.x), ty(ai.y), ts(state.playerRadius * 0.85), ai.rotation, ai.form);
+      this.appendPolygonPath(
+        this.effectsShape!,
+        tx(ai.x),
+        ty(ai.y),
+        ts(state.playerRadius * 0.85),
+        ai.rotation,
+        ai.form
+      );
       hasEffects = true;
     }
     const surfMomentum = state.surfMomentum ?? 0;
-    if (surfMomentum > 0.42 || state.isDashing) {
-      const lineCount = state.isDashing ? 8 : Math.floor(surfMomentum * 7);
+    if (surfMomentum > 0.38 || state.isDashing || state.isGrinding) {
+      const lineCount = state.isDashing ? 9 : state.isGrinding ? 7 : Math.floor(surfMomentum * 7);
       for (let i = 0; i < lineCount; i++) {
         const seed = (i * 197 + Math.floor(state.timeSec * 22)) % 100;
-        const lx = ((width - ((state.timeSec * 1450 + i * 230) % (width + 260))) + width) % width;
+        const lx =
+          ((width - ((state.timeSec * 1550 + i * 230) % (width + 260))) + width) % width;
         const ly = i % 2 === 0 ? 45 + (seed % 140) : height - 55 - (seed % 140);
-        const len = 65 + surfMomentum * 95;
+        const len = 70 + surfMomentum * 105;
         this.effectsShape!.moveTo(lx, ly).lineTo(lx + len, ly);
         hasEffects = true;
       }
@@ -553,32 +660,37 @@ export class ThorVGRenderer {
     const py = ty(state.playerScreenY);
     const pr = ts(state.playerRadius);
     if (this.crewAnim) {
-      const height = pr * CREW_HEIGHT_RATIO;
+      const heightPx = pr * CREW_HEIGHT_RATIO;
       const cx = px;
       let cy: number;
       let rotation = 0;
       let flip: 1 | -1 = 1;
       if (phase === 'MICRO') {
-        // Phase Invert: feet on the active rail, body toward the tunnel center.
         flip = state.microPolarity === -1 ? -1 : 1;
-        cy = py + (flip === -1 ? height / 2 : -height / 2);
+        cy = py + (flip === -1 ? heightPx / 2 : -heightPx / 2);
       } else {
-        // Feet rest on the engine's landing line (playerY + playerRadius).
         rotation = state.playerRotation;
-        cy = py + pr - height / 2;
+        cy = py + pr - heightPx / 2;
       }
-      // Aura is centered on the drawn character (in Micro View it is offset from the rail).
       this.drawPlayerPolygon(cx, cy, pr, rotation, activeForm, isInvulnerable ? 0.55 : 1.0, true);
       const blink = isInvulnerable && Math.floor(state.timeSec * 12) % 2 === 0;
-      this.drawCrewmate(cx, cy, height, rotation, flip, state.runCycleTime, blink ? 90 : 255);
+      this.drawCrewmate(cx, cy, heightPx, rotation, flip, state.runCycleTime, blink ? 90 : 255);
     } else {
-      this.drawPlayerPolygon(px, py, pr, state.playerRotation, activeForm, isInvulnerable ? 0.55 : 1.0);
+      this.drawPlayerPolygon(
+        px,
+        py,
+        pr,
+        state.playerRotation,
+        activeForm,
+        isInvulnerable ? 0.55 : 1.0
+      );
     }
 
     // 5. Render Vector Particles
     this.particlesShape!.reset();
     for (const pt of state.particles) {
-      this.particlesShape!.appendCircle(tx(pt.x), ty(pt.y), Math.max(1.5, pt.radius), Math.max(1.5, pt.radius));
+      const rad = Math.max(1.5, pt.radius);
+      this.particlesShape!.appendCircle(tx(pt.x), ty(pt.y), rad, rad);
     }
     if (state.particles.length > 0) {
       this.particlesShape!.fill(fr, fg, fb, 215);
@@ -602,97 +714,253 @@ export class ThorVGRenderer {
     this.spectrumShape!.reset();
     this.waveGlowShape!.reset();
     this.waveCoreShape!.reset();
+    this.platformsShape!.reset();
+    this.gimmicksShape!.reset();
+    this.timingRingsShape!.reset();
     this.orbsShape!.reset();
+    this.trapsShape!.reset();
 
+    let hasTraps = false;
+
+    // 1. Group contiguous solid road segments so chasm gaps (`seg.isGap`) open cleanly into the abyss!
     if (segments.length > 0) {
-      const first = segments[0]!;
-      const startX = tx(first.x0 - cameraX);
-      const startY = ty(first.y0);
-      const harmonicOffset = ts(32 + frequency.mid * 24);
+      const solidRuns: BezierSegment[][] = [];
+      let currentRun: BezierSegment[] = [];
 
-      this.waveFillShape!.moveTo(startX, height).lineTo(startX, startY);
-      this.waveGlowShape!.moveTo(startX, startY);
-      this.waveCoreShape!.moveTo(startX, startY);
+      for (let i = 0; i < segments.length; i++) {
+        const seg = segments[i]!;
+        if (seg.isGap) {
+          if (currentRun.length > 0) {
+            solidRuns.push(currentRun);
+            currentRun = [];
+          }
+          // Draw bright crimson takeoff hazard lip marker at the start of a chasm gap
+          const prevSeg = i > 0 ? segments[i - 1] : undefined;
+          if (prevSeg && !prevSeg.isGap) {
+            const lipX = tx(seg.x0 - cameraX);
+            const lipY = ty(prevSeg.y1);
+            if (lipX >= -40 && lipX <= width + 40) {
+              this.trapsShape!.appendRect(lipX - ts(10), lipY - ts(16), ts(10), ts(18), {
+                rx: ts(2),
+                ry: ts(2),
+              });
+              hasTraps = true;
+            }
+          }
+        } else {
+          currentRun.push(seg);
+        }
+      }
+      if (currentRun.length > 0) {
+        solidRuns.push(currentRun);
+      }
 
-      let endX = startX;
-      for (const seg of segments) {
-        const x0 = tx(seg.x0 - cameraX);
-        const y0 = ty(seg.y0);
-        const cx1 = tx(seg.cx1 - cameraX);
-        const cy1 = ty(seg.cy1);
-        const cx2 = tx(seg.cx2 - cameraX);
-        const cy2 = ty(seg.cy2);
-        const x1 = tx(seg.x1 - cameraX);
-        const y1 = ty(seg.y1);
+      const harmonicOffset = ts(28 + frequency.mid * 20);
+      let hasSpectrum = false;
 
-        this.waveFillShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
-        this.waveGlowShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
-        this.waveCoreShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
+      for (let rIdx = 0; rIdx < solidRuns.length; rIdx++) {
+        const run = solidRuns[rIdx]!;
+        const first = run[0]!;
+        const last = run[run.length - 1]!;
+        const startX = tx(first.x0 - cameraX);
+        const startY = ty(first.y0);
+        const endX = tx(last.x1 - cameraX);
+        const endY = ty(last.y1);
 
-        // Pre-computed audio spectrum equalizer bars under each wave segment (3 bars per segment)
-        if (x1 >= -30 && x0 <= width + 30) {
-          const spanW = Math.max(12, x1 - x0);
-          const subBars = 3;
-          const slotW = spanW / subBars;
-          const barW = Math.max(3, slotW * 0.56);
-          const segLow = seg.low ?? frequency.low;
-          const segMid = seg.mid ?? frequency.mid;
-          const segHigh = seg.high ?? frequency.high;
-          const bands = [segLow, segMid, segHigh];
+        this.waveFillShape!.moveTo(startX, height).lineTo(startX, startY);
+        this.waveGlowShape!.moveTo(startX, startY);
+        this.waveCoreShape!.moveTo(startX, startY);
 
-          for (let b = 0; b < subBars; b++) {
-            const u = (b + 0.5) / subBars;
-            const bx = x0 + b * slotW + (slotW - barW) * 0.5;
-            const approxWaveY = y0 + (y1 - y0) * u + ts(10);
-            const availH = Math.max(12, height - approxWaveY);
-            const bandVal = bands[b] ?? 0.3;
-            const barH = Math.min(availH, availH * (0.22 + bandVal * 0.72));
-            if (barH > 6) {
-              this.spectrumShape!.appendRect(bx, height - barH, barW, barH, { rx: 2, ry: 2 });
+        for (const seg of run) {
+          const x0 = tx(seg.x0 - cameraX);
+          const y0 = ty(seg.y0);
+          const cx1 = tx(seg.cx1 - cameraX);
+          const cy1 = ty(seg.cy1);
+          const cx2 = tx(seg.cx2 - cameraX);
+          const cy2 = ty(seg.cy2);
+          const x1 = tx(seg.x1 - cameraX);
+          const y1 = ty(seg.y1);
+
+          this.waveFillShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
+          this.waveGlowShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
+          this.waveCoreShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
+
+          // Pre-computed audio spectrum equalizer bars under each solid sprint segment
+          if (x1 >= -30 && x0 <= width + 30) {
+            const spanW = Math.max(12, x1 - x0);
+            const subBars = 3;
+            const slotW = spanW / subBars;
+            const barW = Math.max(3, slotW * 0.56);
+            const segLow = seg.low ?? frequency.low;
+            const segMid = seg.mid ?? frequency.mid;
+            const segHigh = seg.high ?? frequency.high;
+            const bands = [segLow, segMid, segHigh];
+
+            for (let b = 0; b < subBars; b++) {
+              const u = (b + 0.5) / subBars;
+              const bx = x0 + b * slotW + (slotW - barW) * 0.5;
+              const approxWaveY = y0 + (y1 - y0) * u + ts(12);
+              const availH = Math.max(12, height - approxWaveY);
+              const bandVal = bands[b] ?? 0.3;
+              const barH = Math.min(availH, availH * (0.2 + bandVal * 0.72));
+              if (barH > 6) {
+                this.spectrumShape!.appendRect(bx, height - barH, barW, barH, { rx: 2, ry: 2 });
+                hasSpectrum = true;
+              }
             }
           }
         }
 
-        endX = x1;
+        this.waveFillShape!.lineTo(endX, height).close();
+
+        // Crisp cliff walls bordering chasm gaps
+        if (rIdx > 0) {
+          this.waveCoreShape!.moveTo(startX, startY).lineTo(startX, height);
+          this.waveGlowShape!.moveTo(startX, startY).lineTo(startX, height);
+        }
+        if (rIdx < solidRuns.length - 1) {
+          this.waveCoreShape!.moveTo(endX, endY).lineTo(endX, height);
+          this.waveGlowShape!.moveTo(endX, endY).lineTo(endX, height);
+        }
+
+        // Secondary harmonic echo curve under solid deck run
+        this.waveGlowShape!.moveTo(startX, startY + harmonicOffset);
+        for (const seg of run) {
+          const cx1 = tx(seg.cx1 - cameraX);
+          const cy1 = ty(seg.cy1) + harmonicOffset;
+          const cx2 = tx(seg.cx2 - cameraX);
+          const cy2 = ty(seg.cy2) + harmonicOffset;
+          const x1 = tx(seg.x1 - cameraX);
+          const y1 = ty(seg.y1) + harmonicOffset;
+          this.waveGlowShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
+        }
       }
 
-      // Secondary harmonic echo curve stroked cleanly along the wave glow layer
-      this.waveGlowShape!.moveTo(startX, startY + harmonicOffset);
-      for (const seg of segments) {
-        const cx1 = tx(seg.cx1 - cameraX);
-        const cy1 = ty(seg.cy1) + harmonicOffset;
-        const cx2 = tx(seg.cx2 - cameraX);
-        const cy2 = ty(seg.cy2) + harmonicOffset;
-        const x1 = tx(seg.x1 - cameraX);
-        const y1 = ty(seg.y1) + harmonicOffset;
-        this.waveGlowShape!.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
+      if (solidRuns.length > 0) {
+        const fillAlpha = isDrop ? 56 : 40;
+        const glowWidth = ts(isDrop || frequency.isBeat ? 11 : 8);
+        const glowAlpha = isDrop || frequency.isBeat ? 128 : 92;
+
+        this.waveFillShape!.fill(fr, fg, fb, fillAlpha);
+        if (hasSpectrum) {
+          this.spectrumShape!
+            .fill(fr, fg, fb, isDrop ? 82 : 52)
+            .stroke({ width: ts(1.2), color: [sr, sg, sb, 115] });
+        }
+        this.waveGlowShape!.stroke({ width: glowWidth, color: [fr, fg, fb, glowAlpha] });
+        this.waveCoreShape!.stroke({ width: ts(3.4), color: [255, 255, 255, 245] });
       }
-
-      const fillAlpha = isDrop ? 54 : 38;
-      const glowWidth = ts(isDrop || frequency.isBeat ? 11 : 8);
-      const glowAlpha = isDrop || frequency.isBeat ? 125 : 88;
-
-      this.waveFillShape!.lineTo(Math.max(width, endX), height).close().fill(fr, fg, fb, fillAlpha);
-      this.spectrumShape!
-        .fill(fr, fg, fb, isDrop ? 82 : 52)
-        .stroke({ width: ts(1.2), color: [sr, sg, sb, 115] });
-      this.waveGlowShape!.stroke({ width: glowWidth, color: [fr, fg, fb, glowAlpha] });
-      this.waveCoreShape!.stroke({ width: ts(3.2), color: [255, 255, 255, 245] });
     }
 
-    // Rhythm Resonance Orbs (along the wave contour & airborne Crest Launch arcs)
+    // 2. Render 2nd-Floor One-Way Sky Platforms (`SkyPlatform`)
+    let hasPlatforms = false;
+    for (const plat of state.skyPlatforms ?? []) {
+      const sx0 = tx(plat.x0 - cameraX);
+      const sx1 = tx(plat.x1 - cameraX);
+      if (sx1 < -40 || sx0 > width + 40) continue;
+      const sy = ty(plat.screenY ?? plat.worldY);
+      const pw = Math.max(ts(24), sx1 - sx0);
+      const ph = ts(11);
+
+      this.platformsShape!.appendRect(sx0, sy, pw, ph, { rx: ts(4), ry: ts(4) });
+      // Support accent struts under platform ends
+      this.platformsShape!
+        .appendRect(sx0 + ts(8), sy + ph, ts(4), ts(10))
+        .appendRect(sx0 + pw - ts(12), sy + ph, ts(4), ts(10));
+      hasPlatforms = true;
+    }
+    if (hasPlatforms) {
+      this.platformsShape!
+        .fill(sr, sg, sb, 170)
+        .stroke({ width: ts(2.4), color: [255, 255, 255, 245] });
+    }
+
+    // 3. Render 3 Track Gimmick Objects (`HoldRail`, `JumpPad`, `DashRing`)
+    let hasGimmicks = false;
+    let hasTimingRings = false;
+
+    // 3A. Hold Note Rails
+    for (const rail of state.holdRails ?? []) {
+      if (rail.completed) continue;
+      const rx0 = tx(rail.x0 - cameraX);
+      const rx1 = tx(rail.x1 - cameraX);
+      if (rx1 < -40 || rx0 > width + 40) continue;
+      const ry = ty(rail.screenY ?? rail.worldY);
+      const beamH = ts(rail.active ? 11 : 8);
+      this.gimmicksShape!
+        .appendRect(rx0, ry - beamH * 0.5, Math.max(ts(20), rx1 - rx0), beamH, {
+          rx: beamH * 0.5,
+          ry: beamH * 0.5,
+        })
+        .appendCircle(rx0, ry, ts(9.5), ts(9.5))
+        .appendCircle(rx1, ry, ts(11), ts(11));
+      hasGimmicks = true;
+    }
+
+    // 3B. Beat Jump Pads
+    for (const pad of state.jumpPads ?? []) {
+      const px = tx(pad.worldX - cameraX);
+      if (px < -40 || px > width + 40) continue;
+      const py = ty(pad.screenY ?? pad.worldY);
+      const padW = ts(42);
+      const padH = ts(10);
+      this.gimmicksShape!.appendRect(px - padW * 0.5, py - padH, padW, padH, {
+        rx: ts(3),
+        ry: ts(3),
+      });
+      // Upward launch chevron above the pad
+      const lift = pad.triggered ? ts(26) : ts(16);
+      this.gimmicksShape!
+        .moveTo(px - ts(12), py - lift)
+        .lineTo(px, py - lift - ts(12))
+        .lineTo(px + ts(12), py - lift)
+        .close();
+      hasGimmicks = true;
+    }
+
+    // 3C. Airborne Dash Rings
+    for (const ring of state.dashRings ?? []) {
+      if (ring.triggered) continue;
+      const rx = tx(ring.worldX - cameraX);
+      if (rx < -60 || rx > width + 60) continue;
+      const ry = ty(ring.screenY ?? ring.worldY);
+      const rad = ts(ring.radius);
+      this.gimmicksShape!
+        .appendCircle(rx, ry, rad, rad)
+        .appendCircle(rx, ry, rad * 0.58, rad * 0.58)
+        .moveTo(rx - rad * 0.18, ry - rad * 0.28)
+        .lineTo(rx + rad * 0.28, ry)
+        .lineTo(rx - rad * 0.18, ry + rad * 0.28)
+        .close();
+      hasGimmicks = true;
+
+      const dtRing = ring.timeSec - (state.audioSec ?? state.timeSec);
+      if (dtRing >= -0.06 && dtRing <= 0.7) {
+        const ratio = Math.max(0, Math.min(1, dtRing / 0.65));
+        const approachRad = rad * (1.06 + ratio * 1.15);
+        this.timingRingsShape!.appendCircle(rx, ry, approachRad, approachRad);
+        hasTimingRings = true;
+      }
+    }
+
+    if (hasGimmicks) {
+      this.gimmicksShape!
+        .fill(255, 218, 55, 130)
+        .stroke({ width: ts(2.8), color: [255, 248, 175, 250] });
+    }
+
+    // 4. Rhythm Beat Notes (`ResonanceOrb`) + Shrinking Beat Timing Rings
     const orbs = state.orbs ?? [];
     let hasOrbs = false;
     for (const orb of orbs) {
       if (orb.collected) continue;
       const ox = tx(orb.worldX - cameraX);
-      if (ox < -40 || ox > width + 40) continue;
+      if (ox < -45 || ox > width + 45) continue;
       const oy = ty(orb.screenY ?? orb.worldY);
       const pulse = 1 + Math.sin(state.timeSec * 8 + orb.id * 0.7) * 0.14;
       const rad = ts(orb.radius * pulse);
 
       if (orb.isArcOrb) {
-        // Diamond star for airborne Crest Launch arc orbs
         this.orbsShape!
           .moveTo(ox, oy - rad * 1.35)
           .lineTo(ox + rad * 1.35, oy)
@@ -703,22 +971,35 @@ export class ThorVGRenderer {
         this.orbsShape!.appendCircle(ox, oy, rad, rad);
       }
       hasOrbs = true;
+
+      // Shrinking timing ring around beat targets within 0.65s of the player hit-line
+      if (orb.isBeatTarget && orb.timeSec !== undefined) {
+        const dtBeat = orb.timeSec - (state.audioSec ?? state.timeSec);
+        if (dtBeat >= -0.05 && dtBeat <= 0.65) {
+          const ratio = Math.max(0, Math.min(1, dtBeat / 0.6));
+          const ringRad = ts(orb.radius * (1.12 + ratio * 1.95));
+          this.timingRingsShape!.appendCircle(ox, oy, ringRad, ringRad);
+          hasTimingRings = true;
+        }
+      }
+    }
+    if (hasTimingRings) {
+      this.timingRingsShape!.stroke({ width: ts(2.0), color: [255, 238, 120, 215] });
     }
     if (hasOrbs) {
       this.orbsShape!
-        .fill(sr, sg, sb, 225)
+        .fill(sr, sg, sb, 230)
         .stroke({ width: ts(2.2), color: [255, 255, 255, 250] });
     }
 
-    // Beat Traps (Spikes on the waveform)
-    this.trapsShape!.reset();
-    let hasTraps = false;
+    // 5. Beat Traps (Crimson Spikes on Solid Sprint Decks)
     for (const trap of traps) {
       if (trap.destroyed) continue;
       const sx = tx(trap.worldX - cameraX);
       if (sx < -60 || sx > width + 60) continue;
-      // Floor height is attached to trap's dynamic y stored in width/height context by GameEngine
-      const baseY = ty((trap as BeatTrap & { screenFloorY?: number }).screenFloorY ?? height * 0.68);
+      const baseY = ty(
+        (trap as BeatTrap & { screenFloorY?: number }).screenFloorY ?? height * 0.7
+      );
       const halfW = ts(trap.width * 0.5);
       const spikeH = ts(trap.height);
 
@@ -730,10 +1011,10 @@ export class ThorVGRenderer {
       hasTraps = true;
     }
     if (hasTraps) {
-      this.trapsShape!.fill(255, 50, 95, 230).stroke({ width: 2, color: [255, 210, 220, 255] });
+      this.trapsShape!.fill(255, 50, 95, 232).stroke({ width: 2, color: [255, 210, 220, 255] });
     }
 
-    // Frequency Diving Nodes (Portals)
+    // 6. Frequency Diving Nodes (Portals)
     this.portalsShape!.reset();
     let portalColor: [number, number, number] = [5, 213, 255];
     let hasPortals = false;
@@ -761,7 +1042,16 @@ export class ThorVGRenderer {
    * Renders Phase 2: Micro View high-speed raw frequency tunnel and phase gates.
    */
   private renderMicroTunnel(state: RenderFrameState): void {
-    const { width, height, timeSec, divingTargetForm, frequency, microGates, cameraX, microPolarity } = state;
+    const {
+      width,
+      height,
+      timeSec,
+      divingTargetForm,
+      frequency,
+      microGates,
+      cameraX,
+      microPolarity,
+    } = state;
     const [mr, mg, mb] = FORM_CONFIG[divingTargetForm].rgb;
 
     const topLaneY = height * 0.34;
@@ -773,6 +1063,9 @@ export class ThorVGRenderer {
     this.spectrumShape!.reset();
     this.waveGlowShape!.reset();
     this.waveCoreShape!.reset();
+    this.platformsShape!.reset();
+    this.gimmicksShape!.reset();
+    this.timingRingsShape!.reset();
     this.orbsShape!.reset();
 
     // Upper and Lower raw oscillating waveform tunnel walls
@@ -820,7 +1113,6 @@ export class ThorVGRenderer {
       const sx = gate.worldX - cameraX;
       if (sx < -60 || sx > width + 60) continue;
 
-      // Danger barrier is on the opposite polarity lane of safePolarity
       const dangerY = gate.safePolarity === -1 ? bottomLaneY : topLaneY;
       const safeY = gate.safePolarity === -1 ? topLaneY : bottomLaneY;
 
@@ -887,7 +1179,6 @@ export class ThorVGRenderer {
     form: ResonanceFormType
   ): void {
     if (form === 'bass') {
-      // Bass Form: Heavy Hexagonal Armor Polygon (6 vertices)
       for (let i = 0; i < 6; i++) {
         const angle = rotation + (i * Math.PI) / 3;
         const vx = cx + Math.cos(angle) * radius;
@@ -897,7 +1188,6 @@ export class ThorVGRenderer {
       }
       shape.close();
     } else if (form === 'synth') {
-      // Synth Form: Streamlined Diamond Polygon (4 stretched vertices)
       const pts: Array<[number, number]> = [
         [radius * 1.35, 0],
         [0, radius * 0.85],
@@ -914,7 +1204,6 @@ export class ThorVGRenderer {
       });
       shape.close();
     } else {
-      // Treble Form: Sharp Triangular Arrowhead (Dart polygon)
       const pts: Array<[number, number]> = [
         [radius * 1.45, 0],
         [-radius * 1.0, radius * 0.82],
@@ -941,11 +1230,6 @@ export class ThorVGRenderer {
     if (this.disposed) return;
     this.disposed = true;
     void enqueueEngineJob(() => {
-      // Order matters (both steps must happen before term(), see `ownedObjects`):
-      // 1) Drop our references while the canvas and its WebGL context are still alive.
-      //    The main scene still holds each paint, so nothing is freed yet.
-      // 2) canvas.destroy() clears the scene, which frees the paints with a valid context.
-      //    Disposing after destroy() would free into a deleted GL context and throw.
       for (const obj of this.ownedObjects) {
         try {
           obj.dispose();
