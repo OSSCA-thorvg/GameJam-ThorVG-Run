@@ -7,6 +7,7 @@ import { ResultModal } from './components/ResultModal';
 import { StartScreen } from './components/StartScreen';
 import { TrackLoadingModal } from './components/TrackLoadingModal';
 import { GameEngine } from './engine/GameEngine';
+import { InputController } from './engine/InputController';
 import { trackTitle } from './i18n/display';
 import { useI18n } from './i18n/I18nProvider';
 import { ThorVGRenderer } from './renderer/ThorVGRenderer';
@@ -67,13 +68,20 @@ export const App: React.FC = () => {
     stage: 'decoding',
   });
 
+  const shellRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<ThorVGRenderer | null>(null);
   const audioRef = useRef<AudioEngine | null>(null);
   const gameEngineRef = useRef<GameEngine | null>(null);
-  // Read inside preview loop without re-creating the WASM renderer.
+
+  // Refs read by RAF preview and InputController without re-subscribing listeners.
   const difficultyRef = useRef<DifficultyMode>(difficulty);
   difficultyRef.current = difficulty;
+  const inGameRef = useRef<boolean>(inGame);
+  inGameRef.current = inGame;
+  const isFinishedRef = useRef<boolean>(hud.isFinished);
+  isFinishedRef.current = hud.isFinished;
+
   // The splash plays once per page load, even if the renderer is re-created later.
   const splashStartedRef = useRef<boolean>(false);
   const launchSeqRef = useRef<number>(0);
@@ -161,57 +169,26 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // Keyboard controls for On-Beat Jump / Hold Rail, Fast Drop, Form Skill/Dash, and Resonance Swap
+  const handleReturnToMenu = useCallback(() => {
+    launchSeqRef.current++;
+    gameEngineRef.current?.stopRun();
+    setScreen('menu');
+  }, []);
+
+  // Command-Pattern InputController binding keyboard & pointer controls once
   useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (!inGame) return;
-      if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
-        e.preventDefault();
-        if (e.repeat) return;
-        gameEngineRef.current?.handlePrimaryAction();
-      } else if (e.code === 'ArrowDown' || e.code === 'KeyS') {
-        e.preventDefault();
-        gameEngineRef.current?.setDiveHeld(true);
-      } else if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
-        e.preventDefault();
-        if (e.repeat) return;
-        gameEngineRef.current?.handleSecondaryAction();
-      } else if (e.code === 'Digit1') {
-        if (!e.repeat) gameEngineRef.current?.handleFormSwap('bass');
-      } else if (e.code === 'Digit2') {
-        if (!e.repeat) gameEngineRef.current?.handleFormSwap('synth');
-      } else if (e.code === 'Digit3') {
-        if (!e.repeat) gameEngineRef.current?.handleFormSwap('treble');
-      } else if (e.code === 'KeyQ') {
-        if (!e.repeat) gameEngineRef.current?.handleFormSwap();
-      } else if (e.code === 'Escape') {
-        gameEngineRef.current?.stopRun();
-        setScreen('menu');
-      }
-    };
-
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
-        gameEngineRef.current?.setJumpHeld(false);
-      } else if (e.code === 'ArrowDown' || e.code === 'KeyS') {
-        gameEngineRef.current?.setDiveHeld(false);
-      }
-    };
-
-    const onBlur = () => {
-      gameEngineRef.current?.setJumpHeld(false);
-      gameEngineRef.current?.setDiveHeld(false);
-    };
-
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    window.addEventListener('blur', onBlur);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('blur', onBlur);
-    };
-  }, [inGame]);
+    const controller = new InputController({
+      isGameActive: () => inGameRef.current,
+      isRunFinished: () => isFinishedRef.current,
+      onPrimaryPress: () => gameEngineRef.current?.handlePrimaryAction(),
+      onPrimaryRelease: () => gameEngineRef.current?.setJumpHeld(false),
+      onDiveHoldChange: (held) => gameEngineRef.current?.setDiveHeld(held),
+      onSecondaryPress: () => gameEngineRef.current?.handleSecondaryAction(),
+      onSwapForm: (form) => gameEngineRef.current?.handleFormSwap(form),
+      onPauseOrExit: handleReturnToMenu,
+    });
+    return controller.attach(shellRef.current);
+  }, [handleReturnToMenu]);
 
   const handleUploadFile = useCallback(
     async (file: File, supportedFormats: readonly AudioFormat[]) => {
@@ -271,12 +248,6 @@ export const App: React.FC = () => {
     })();
   }, [difficulty, rendererMode, selectedTrack]);
 
-  const handleReturnToMenu = useCallback(() => {
-    launchSeqRef.current++;
-    gameEngineRef.current?.stopRun();
-    setScreen('menu');
-  }, []);
-
   const handleSwitchRendererAndReplay = useCallback(
     (nextMode: RendererMode) => {
       gameEngineRef.current?.stopRun();
@@ -289,26 +260,7 @@ export const App: React.FC = () => {
   );
 
   return (
-    <div
-      className="app-shell"
-      onMouseDown={(e) => {
-        if (!inGame || hud.isFinished) return;
-        if ((e.target as HTMLElement).closest('button')) return;
-        if (e.button === 0) {
-          gameEngineRef.current?.handlePrimaryAction();
-        } else if (e.button === 2) {
-          gameEngineRef.current?.handleSecondaryAction();
-        }
-      }}
-      onMouseUp={(e) => {
-        if (e.button === 0) {
-          gameEngineRef.current?.setJumpHeld(false);
-        }
-      }}
-      onContextMenu={(e) => {
-        if (inGame) e.preventDefault();
-      }}
-    >
+    <div ref={shellRef} className="app-shell">
       {/* Keyed by rendererMode so React cleanly replaces DOM <canvas> on CPU <-> GPU switch */}
       <canvas key={rendererMode} ref={canvasRef} id="tvg-canvas" className="tvg-canvas" />
 

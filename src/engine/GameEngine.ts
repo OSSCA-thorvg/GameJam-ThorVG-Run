@@ -4,44 +4,42 @@ import { ThorVGRenderer } from '../renderer/ThorVGRenderer';
 import {
   DIFFICULTY_CONFIG,
   FORM_CONFIG,
-  type AfterimageTrail,
   type BannerMessage,
   type DifficultyMode,
   type GamePhase,
   type HUDTelemetry,
-  type JudgmentCounts,
-  type JudgmentFeedback,
   type JudgmentGrade,
   type LoadingProgress,
   type MicroGate,
   type RendererMode,
   type ResonanceFormType,
-  type ResultRank,
   type SectionIntensity,
-  type ShockwaveEffect,
   type TrackBlueprint,
   type TrackMetadata,
-  type VectorParticle,
 } from '../types/game';
 import { BezierTerrain } from './BezierTerrain';
 import { PlayerController } from './PlayerController';
+import { ScoreJudgeSystem } from './systems/ScoreJudgeSystem';
+import { VfxPoolSystem } from './systems/VfxPoolSystem';
 
 export const PLAYER_HIT_X_RATIO = 0.24;
 const ZOOM_THRESHOLD = 50.0;
+const HUD_PUBLISH_INTERVAL_SEC = 0.05; // 20Hz steady telemetry + 0ms instant flush on discrete dirty events
 
 /**
- * Core 60fps Hybrid Rhythm-Runner Engine:
+ * Core 60fps Hybrid Rhythm-Runner Coordinator:
  * - Zero-offset 1:1 Audio-to-Player synchronization (`playerWorldX = audioSec * baseSpeed`)
- * - Multi-tier Sprint Decks, Abyss Chasm Gaps & One-Way 2F Sky Platforms
- * - 3 Track Gimmicks: Beat Jump Pads, Airborne Dash Rings & Hold Note Rails
- * - Real-time Timing Judgments (`PERFECT / GREAT / GOOD / MISS`) & Beat Camera Punch
+ * - Composes `BezierTerrain` (O(log N + K) streaming), `PlayerController`, `ScoreJudgeSystem`, and `VfxPoolSystem`
+ * - Publishes HUD telemetry at 20Hz with immediate dirty-flag flushing on judgments, combos, and phase transitions
  */
 export class GameEngine {
-  private audio: AudioEngine;
-  private terrain: BezierTerrain;
-  private playerController: PlayerController;
+  private readonly audio: AudioEngine;
+  private readonly terrain: BezierTerrain;
+  private readonly playerController: PlayerController;
+  private readonly scoreJudge: ScoreJudgeSystem;
+  private readonly vfx: VfxPoolSystem;
   private renderer: ThorVGRenderer | null = null;
-  private onHudUpdate: (hud: HUDTelemetry) => void;
+  private readonly onHudUpdate: (hud: HUDTelemetry) => void;
 
   private width: number = 1280;
   private height: number = 720;
@@ -50,7 +48,7 @@ export class GameEngine {
 
   private activeBlueprint: TrackBlueprint | null = null;
 
-  // Loop & Timing
+  // Loop, Timing & HUD Throttling
   private rafId: number = 0;
   private running: boolean = false;
   private lastFrameTime: number = 0;
@@ -58,6 +56,8 @@ export class GameEngine {
   private fpsFrames: number = 0;
   private fpsAccum: number = 0;
   private currentFps: number = 60;
+  private hudPublishAccum: number = 0;
+  private hudDirty: boolean = true;
 
   // Phase & Infinite Zoom State (Origin Rebasing)
   private phase: GamePhase = 'MACRO';
@@ -73,7 +73,7 @@ export class GameEngine {
   private playerY: number = 360;
   private playerVy: number = 0;
   private playerRotation: number = 0;
-  private playerRadius: number = 22;
+  private readonly playerRadius: number = 22;
   private isGrounded: boolean = false;
   private jumpsRemaining: number = 2;
   private dashTimer: number = 0;
@@ -101,29 +101,16 @@ export class GameEngine {
   private nextMicroGateX: number = 0;
   private nextMicroGateId: number = 1;
 
-  // Score, Rhythm Judgments & Visual Effects
-  private score: number = 0;
-  private combo: number = 1;
-  private maxCombo: number = 1;
-  private orbsCollected: number = 0;
-  private trapsDestroyed: number = 0;
-  private divesCompleted: number = 0;
-  private gimmicksTriggered: number = 0;
-  private judgmentCounts: JudgmentCounts = { perfect: 0, great: 0, good: 0, miss: 0 };
-  private activeJudgment: JudgmentFeedback | null = null;
-  private judgmentTimer: number = 0;
-  private nextJudgmentId: number = 1;
+  // Status Banner State
   private statusBanner: BannerMessage | null = null;
   private statusBannerTimer: number = 0;
-
-  private shockwaves: ShockwaveEffect[] = [];
-  private afterimages: AfterimageTrail[] = [];
-  private particles: VectorParticle[] = [];
 
   constructor(audio: AudioEngine, onHudUpdate: (hud: HUDTelemetry) => void) {
     this.audio = audio;
     this.terrain = new BezierTerrain();
     this.playerController = new PlayerController();
+    this.scoreJudge = new ScoreJudgeSystem();
+    this.vfx = new VfxPoolSystem();
     this.onHudUpdate = onHudUpdate;
   }
 
@@ -137,10 +124,12 @@ export class GameEngine {
     this.rendererMode = mode;
     this.width = width;
     this.height = height;
+    this.hudDirty = true;
   }
 
   public setDifficulty(difficulty: DifficultyMode): void {
     this.difficulty = difficulty;
+    this.hudDirty = true;
   }
 
   public getDifficulty(): DifficultyMode {
@@ -210,6 +199,8 @@ export class GameEngine {
 
   private resetState(): void {
     this.elapsedSec = 0;
+    this.hudPublishAccum = 0;
+    this.hudDirty = true;
     this.phase = 'MACRO';
     this.zoomScale = 1.0;
     this.rebasedZoomDisplay = 1.0;
@@ -256,19 +247,8 @@ export class GameEngine {
     this.microPolarity = -1;
     this.microGates = [];
 
-    this.score = 0;
-    this.combo = 1;
-    this.maxCombo = 1;
-    this.orbsCollected = 0;
-    this.trapsDestroyed = 0;
-    this.divesCompleted = 0;
-    this.gimmicksTriggered = 0;
-    this.judgmentCounts = { perfect: 0, great: 0, good: 0, miss: 0 };
-    this.activeJudgment = null;
-    this.judgmentTimer = 0;
-    this.shockwaves = [];
-    this.afterimages = [];
-    this.particles = [];
+    this.scoreJudge.reset();
+    this.vfx.reset();
     this.setBanner({ key: 'ready' }, 2.4);
   }
 
@@ -287,16 +267,6 @@ export class GameEngine {
     this.isDiveHeld = held;
   }
 
-  /**
-   * Evaluates a timing offset (ms) against the current difficulty's judgment windows.
-   */
-  private classifyDeltaMs(deltaMs: number): JudgmentGrade {
-    const cfg = DIFFICULTY_CONFIG[this.difficulty];
-    if (deltaMs <= cfg.perfectMs) return 'PERFECT';
-    if (deltaMs <= cfg.greatMs) return 'GREAT';
-    return 'GOOD';
-  }
-
   private emitJudgment(
     grade: JudgmentGrade,
     screenX: number,
@@ -304,51 +274,22 @@ export class GameEngine {
     deltaMs?: number,
     basePoints: number = 220
   ): void {
+    this.scoreJudge.recordJudgment(grade, deltaMs, basePoints);
+
     if (grade === 'PERFECT') {
-      this.judgmentCounts.perfect++;
-      this.combo = Math.min(99, this.combo + 2);
       this.beatPulse = 1.0;
       this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.1);
       this.resonanceGauge = Math.min(100, this.resonanceGauge + 4);
-      const pts = Math.round(basePoints * 1.5 * Math.max(1, this.combo * 0.25));
-      this.score += pts;
-      this.activeJudgment = { id: this.nextJudgmentId++, grade, deltaMs, bonusScore: pts };
-      this.judgmentTimer = 0.72;
-      this.shockwaves.push({
-        x: screenX,
-        y: screenY,
-        radius: 14,
-        maxRadius: 92,
-        color: [255, 230, 0],
-        alpha: 0.95,
-      });
-      this.spawnBurst(screenX, screenY, [255, 230, 0], 12);
+      this.vfx.spawnShockwave(screenX, screenY, 14, 92, [255, 230, 0], 0.95);
+      this.vfx.spawnBurst(screenX, screenY, [255, 230, 0], 12);
     } else if (grade === 'GREAT') {
-      this.judgmentCounts.great++;
-      this.combo = Math.min(99, this.combo + 1);
       this.beatPulse = Math.max(this.beatPulse, 0.55);
       this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.06);
       this.resonanceGauge = Math.min(100, this.resonanceGauge + 2.5);
-      const pts = Math.round(basePoints * 1.15 * Math.max(1, this.combo * 0.22));
-      this.score += pts;
-      this.activeJudgment = { id: this.nextJudgmentId++, grade, deltaMs, bonusScore: pts };
-      this.judgmentTimer = 0.65;
-      this.spawnBurst(screenX, screenY, [5, 213, 255], 8);
-    } else if (grade === 'GOOD') {
-      this.judgmentCounts.good++;
-      this.combo = Math.min(99, this.combo + 1);
-      const pts = Math.round(basePoints * 0.8 * Math.max(1, this.combo * 0.18));
-      this.score += pts;
-      this.activeJudgment = { id: this.nextJudgmentId++, grade, deltaMs, bonusScore: pts };
-      this.judgmentTimer = 0.55;
-    } else {
-      this.judgmentCounts.miss++;
-      this.combo = 1;
+      this.vfx.spawnBurst(screenX, screenY, [5, 213, 255], 8);
+    } else if (grade === 'MISS') {
       this.surfMomentum = Math.max(0.15, this.surfMomentum * 0.5);
-      this.activeJudgment = { id: this.nextJudgmentId++, grade: 'MISS', bonusScore: 0 };
-      this.judgmentTimer = 0.85;
     }
-    this.maxCombo = Math.max(this.maxCombo, this.combo);
   }
 
   /**
@@ -389,10 +330,10 @@ export class GameEngine {
 
     if (bestOrb) {
       bestOrb.collected = true;
-      this.orbsCollected++;
+      this.scoreJudge.recordOrbCollected();
       const targetSec = bestOrb.timeSec ?? bestOrb.worldX / this.baseSpeed;
       const deltaMs = Math.round(Math.abs(audioSec - targetSec) * 1000);
-      const grade = this.classifyDeltaMs(deltaMs);
+      const grade = this.scoreJudge.classifyDeltaMs(deltaMs, this.difficulty);
       const oy = bestOrb.screenY ?? bestOrb.worldY;
       this.emitJudgment(grade, playerScreenX, oy, deltaMs, bestOrb.isBeatTarget ? 260 : 180);
     }
@@ -410,13 +351,13 @@ export class GameEngine {
       const targetLaneY =
         this.microPolarity === -1 ? this.height * 0.34 : this.height * 0.66;
       this.playerY = targetLaneY;
-      this.spawnBurst(
+      this.vfx.spawnBurst(
         playerScreenX,
         this.playerY,
         FORM_CONFIG[this.divingTargetForm].rgb,
         10
       );
-      this.score += 35 * this.combo;
+      this.scoreJudge.addRawScore(35 * this.scoreJudge.combo);
       return;
     }
 
@@ -437,7 +378,7 @@ export class GameEngine {
         0,
         (isSecondJump ? this.jumpsRemaining : profile.maxJumps) - 1
       );
-      this.spawnBurst(
+      this.vfx.spawnBurst(
         playerScreenX,
         this.playerY + this.playerRadius,
         FORM_CONFIG[this.activeForm].rgb,
@@ -452,8 +393,9 @@ export class GameEngine {
     this.playerController.swapForm(nextForm);
     this.activeForm = nextForm;
     this.jumpsRemaining = this.playerController.profile.maxJumps;
+    this.hudDirty = true;
     const playerScreenX = this.getPlayerScreenX();
-    this.spawnBurst(playerScreenX, this.playerY, FORM_CONFIG[nextForm].rgb, 18);
+    this.vfx.spawnBurst(playerScreenX, this.playerY, FORM_CONFIG[nextForm].rgb, 18);
     this.setBanner({ key: 'manualSwap', params: { form: nextForm } }, 1.6);
   }
 
@@ -502,7 +444,7 @@ export class GameEngine {
     audioSec: number
   ): void {
     ring.triggered = true;
-    this.gimmicksTriggered++;
+    this.scoreJudge.recordGimmickTriggered();
     const ry = ring.screenY ?? ring.worldY;
     this.playerY = ry;
     this.playerVy = 0;
@@ -514,22 +456,11 @@ export class GameEngine {
 
     const deltaMs = Math.round(Math.abs(audioSec - ring.timeSec) * 1000);
     const inputRecent = Math.abs(audioSec - this.lastActionAudioSec) <= 0.16;
-    const grade: JudgmentGrade = inputRecent ? this.classifyDeltaMs(deltaMs) : 'GREAT';
+    const grade: JudgmentGrade = inputRecent
+      ? this.scoreJudge.classifyDeltaMs(deltaMs, this.difficulty)
+      : 'GREAT';
     this.emitJudgment(grade, playerScreenX, ry, deltaMs, 320);
     this.setBanner({ key: 'wavePump' }, 1.1);
-  }
-
-  private computeAccuracyAndRank(): { accuracy: number; rank: ResultRank } {
-    const { perfect, great, good, miss } = this.judgmentCounts;
-    const total = perfect + great + good + miss;
-    if (total === 0) {
-      return { accuracy: 100, rank: 'S' };
-    }
-    const weighted = perfect * 1.0 + great * 0.78 + good * 0.45;
-    const accuracy = Number(Math.min(100, (weighted / total) * 100).toFixed(1));
-    const rank: ResultRank =
-      accuracy >= 92 ? 'S' : accuracy >= 82 ? 'A' : accuracy >= 70 ? 'B' : 'C';
-    return { accuracy, rank };
   }
 
   private loop = (now: number): void => {
@@ -557,12 +488,13 @@ export class GameEngine {
 
     if (this.statusBannerTimer > 0) {
       this.statusBannerTimer = Math.max(0, this.statusBannerTimer - dt);
-      if (this.statusBannerTimer === 0) this.statusBanner = null;
+      if (this.statusBannerTimer === 0 && this.statusBanner !== null) {
+        this.statusBanner = null;
+        this.hudDirty = true;
+      }
     }
-    if (this.judgmentTimer > 0) {
-      this.judgmentTimer = Math.max(0, this.judgmentTimer - dt);
-      if (this.judgmentTimer === 0) this.activeJudgment = null;
-    }
+    this.scoreJudge.tick(dt);
+
     if (this.dashCooldown > 0) this.dashCooldown = Math.max(0, this.dashCooldown - dt);
     if (this.invulnerableTimer > 0) {
       this.invulnerableTimer = Math.max(0, this.invulnerableTimer - dt);
@@ -620,7 +552,7 @@ export class GameEngine {
       this.updateZoomOutTransition(dt, playerScreenX, playerWorldX);
     }
 
-    this.updateVisualEffects(dt, stepX);
+    this.vfx.update(dt, stepX);
 
     // Subtle Beat Camera Zoom Punch in MACRO phase (1.000x ~ 1.030x)
     const effectiveZoomScale =
@@ -666,9 +598,9 @@ export class GameEngine {
       sectionIntensity: this.currentSectionIntensity,
       invulnerableTimer: this.invulnerableTimer,
       runCycleTime: this.runCycleTime,
-      shockwaves: this.shockwaves,
-      afterimages: this.afterimages,
-      particles: this.particles,
+      shockwaves: this.vfx.getShockwaves(),
+      afterimages: this.vfx.getAfterimages(),
+      particles: this.vfx.getParticles(),
     });
 
     const progress = this.audio.getProgress();
@@ -677,7 +609,26 @@ export class GameEngine {
       this.running = false;
     }
 
-    const { accuracy, rank } = this.computeAccuracyAndRank();
+    this.hudPublishAccum += dt;
+    const scoreDirty = this.scoreJudge.consumeDirty();
+    if (
+      isFinished ||
+      this.hudDirty ||
+      scoreDirty ||
+      this.hudPublishAccum >= HUD_PUBLISH_INTERVAL_SEC
+    ) {
+      this.hudPublishAccum = 0;
+      this.hudDirty = false;
+      this.publishHud(progress, speedMultiplier, isFinished);
+    }
+  }
+
+  private publishHud(
+    progress: number,
+    speedMultiplier: number,
+    isFinished: boolean
+  ): void {
+    const { accuracy, rank } = this.scoreJudge.computeAccuracyAndRank();
 
     this.onHudUpdate({
       rendererMode: this.rendererMode,
@@ -685,27 +636,27 @@ export class GameEngine {
       fps: this.currentFps,
       phase: this.phase,
       zoomDisplay: Number(this.rebasedZoomDisplay.toFixed(1)),
-      score: Math.floor(this.score),
-      combo: this.combo,
-      maxCombo: this.maxCombo,
+      score: Math.floor(this.scoreJudge.score),
+      combo: this.scoreJudge.combo,
+      maxCombo: this.scoreJudge.maxCombo,
       progress,
       activeForm: this.activeForm,
       resonanceGauge: Math.min(100, Math.max(0, Math.round(this.resonanceGauge))),
       acousticFilter: this.audio.getAcousticZoomMode(),
       statusBanner: this.statusBanner,
       isFinished,
-      trapsDestroyed: this.trapsDestroyed,
-      divesCompleted: this.divesCompleted + this.gimmicksTriggered,
+      trapsDestroyed: this.scoreJudge.trapsDestroyed,
+      divesCompleted: this.scoreJudge.divesCompleted + this.scoreJudge.gimmicksTriggered,
       surfMomentum: Number(this.surfMomentum.toFixed(2)),
       speedMultiplier: Number(speedMultiplier.toFixed(1)),
-      orbsCollected: this.orbsCollected,
+      orbsCollected: this.scoreJudge.orbsCollected,
       totalOrbs: this.terrain.getTotalOrbCount(),
       sectionIntensity: this.currentSectionIntensity,
       accuracy,
       rank,
-      judgment: this.activeJudgment,
-      judgmentCounts: { ...this.judgmentCounts },
-      gimmicksTriggered: this.gimmicksTriggered,
+      judgment: this.scoreJudge.activeJudgment,
+      judgmentCounts: this.scoreJudge.snapshotCounts(),
+      gimmicksTriggered: this.scoreJudge.gimmicksTriggered,
     });
   }
 
@@ -719,12 +670,15 @@ export class GameEngine {
     const { floorY, angleRad, isGap, segment } = this.terrain.sampleFloor(playerWorldX);
 
     const nextIntensity = segment?.intensity ?? 'groove';
-    if (nextIntensity === 'drop' && this.currentSectionIntensity !== 'drop') {
-      this.setBanner({ key: 'dropSection' }, 1.8);
-      this.beatPulse = 1.0;
-      this.spawnBurst(playerScreenX, this.playerY, FORM_CONFIG[this.activeForm].rgb, 20);
+    if (nextIntensity !== this.currentSectionIntensity) {
+      if (nextIntensity === 'drop') {
+        this.setBanner({ key: 'dropSection' }, 1.8);
+        this.beatPulse = 1.0;
+        this.vfx.spawnBurst(playerScreenX, this.playerY, FORM_CONFIG[this.activeForm].rgb, 20);
+      }
+      this.currentSectionIntensity = nextIntensity;
+      this.hudDirty = true;
     }
-    this.currentSectionIntensity = nextIntensity;
 
     if (
       segment?.isBeatOnset &&
@@ -757,27 +711,24 @@ export class GameEngine {
           this.holdTickAccum += dt;
           if (this.holdTickAccum >= 0.1) {
             this.holdTickAccum -= 0.1;
-            this.combo = Math.min(99, this.combo + 1);
-            this.maxCombo = Math.max(this.maxCombo, this.combo);
-            this.score += 85 * this.combo;
+            this.scoreJudge.addHoldRailTick();
             this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.04);
-            this.particles.push({
-              x: playerScreenX - 10,
-              y: railY + this.playerRadius * 0.65,
-              vx: -150 - Math.random() * 120,
-              vy: -30 - Math.random() * 80,
-              radius: 4.2,
-              color: FORM_CONFIG[rail.band].rgb,
-              alpha: 1.0,
-              life: 0,
-              maxLife: 0.26,
-            });
+            this.vfx.spawnParticle(
+              playerScreenX - 10,
+              railY + this.playerRadius * 0.65,
+              -150 - Math.random() * 120,
+              -30 - Math.random() * 80,
+              4.2,
+              FORM_CONFIG[rail.band].rgb,
+              1.0,
+              0.26
+            );
           }
 
           if (playerWorldX >= rail.x1 - 20) {
             rail.completed = true;
-            this.gimmicksTriggered++;
-            this.orbsCollected++;
+            this.scoreJudge.recordGimmickTriggered();
+            this.scoreJudge.recordOrbCollected();
             this.emitJudgment('PERFECT', playerScreenX, railY, 0, 320);
             this.setBanner({ key: 'beatBounce' }, 1.1);
           }
@@ -796,13 +747,7 @@ export class GameEngine {
       if (this.airBoostTimer > 0 || (this.dashTimer > 0 && this.activeForm === 'treble')) {
         this.playerVy = 0;
         this.playerRotation = 0;
-        this.afterimages.push({
-          x: playerScreenX,
-          y: this.playerY,
-          rotation: 0,
-          form: this.activeForm,
-          alpha: 0.82,
-        });
+        this.vfx.spawnAfterimage(playerScreenX, this.playerY, 0, this.activeForm, 0.82);
       } else {
         const baseGravity = this.playerController.profile.gravity;
         const fastDropMult = !this.isGrounded && this.isDiveHeld ? 2.45 : 1.0;
@@ -827,7 +772,7 @@ export class GameEngine {
         this.jumpsRemaining = this.activeForm === 'synth' ? 2 : 1;
         this.playerRotation = 0;
         if (wasAir) {
-          this.spawnBurst(playerScreenX, platY, FORM_CONFIG[skyPlat.band].secondaryRgb, 8);
+          this.vfx.spawnBurst(playerScreenX, platY, FORM_CONFIG[skyPlat.band].secondaryRgb, 8);
         }
       } else if (!isGap) {
         // 2B. Solid 1F Ground Sprint Road
@@ -842,17 +787,16 @@ export class GameEngine {
 
           // Subtle sprint dust sparks while running fast
           if (Math.random() < 0.35) {
-            this.particles.push({
-              x: playerScreenX - 10,
-              y: floorY - 2,
-              vx: -120 - Math.random() * 110,
-              vy: -25 - Math.random() * 55,
-              radius: 2.8,
-              color: FORM_CONFIG[this.activeForm].secondaryRgb,
-              alpha: 0.9,
-              life: 0,
-              maxLife: 0.22,
-            });
+            this.vfx.spawnParticle(
+              playerScreenX - 10,
+              floorY - 2,
+              -120 - Math.random() * 110,
+              -25 - Math.random() * 55,
+              2.8,
+              FORM_CONFIG[this.activeForm].secondaryRgb,
+              0.9,
+              0.22
+            );
           }
 
           if (wasAirborne && this.activeForm === 'bass' && this.slamActive) {
@@ -876,7 +820,7 @@ export class GameEngine {
           this.invulnerableTimer = 1.1;
           this.emitJudgment('MISS', playerScreenX, floorY);
           this.setBanner({ key: 'gapFall' }, 1.25);
-          this.spawnBurst(playerScreenX, floorY, [255, 50, 95], 18);
+          this.vfx.spawnBurst(playerScreenX, floorY, [255, 50, 95], 18);
         }
       }
     }
@@ -885,17 +829,19 @@ export class GameEngine {
     this.surfMomentum = Math.max(0.22, Math.min(1.0, this.surfMomentum - 0.06 * dt + 0.04 * dt));
 
     if (this.surfMomentum > 0.72 && Math.floor(this.elapsedSec * 24) % 2 === 0) {
-      this.afterimages.push({
-        x: playerScreenX,
-        y: this.playerY,
-        rotation: this.playerRotation,
-        form: this.activeForm,
-        alpha: 0.42,
-      });
+      this.vfx.spawnAfterimage(
+        playerScreenX,
+        this.playerY,
+        this.playerRotation,
+        this.activeForm,
+        0.42
+      );
     }
 
     // Continuous sprint distance score
-    this.score += dt * 75 * speedMultiplier * Math.max(1, this.combo * 0.35);
+    this.scoreJudge.addRawScore(
+      dt * 75 * speedMultiplier * Math.max(1, this.scoreJudge.combo * 0.35)
+    );
 
     // 3. Check Beat Jump Pads (`JumpPad`)
     for (const pad of this.terrain.getJumpPads()) {
@@ -905,14 +851,16 @@ export class GameEngine {
       const playerBottom = this.playerY + this.playerRadius;
       if (dx <= 34 && Math.abs(playerBottom - padY) <= 32) {
         pad.triggered = true;
-        this.gimmicksTriggered++;
+        this.scoreJudge.recordGimmickTriggered();
         this.playerVy = -855; // High super-bounce onto 2F Sky Platform or across wide chasm!
         this.isGrounded = false;
         this.jumpsRemaining = this.activeForm === 'synth' ? 2 : 1;
         const deltaMs = Math.round(Math.abs(audioSec - pad.timeSec) * 1000);
         const inputRecent = Math.abs(audioSec - this.lastActionAudioSec) <= 0.15;
         this.emitJudgment(
-          inputRecent ? this.classifyDeltaMs(deltaMs) : 'PERFECT',
+          inputRecent
+            ? this.scoreJudge.classifyDeltaMs(deltaMs, this.difficulty)
+            : 'PERFECT',
           playerScreenX,
           padY - 12,
           deltaMs,
@@ -942,10 +890,10 @@ export class GameEngine {
         orb.radius + this.playerRadius + (this.dashTimer > 0 || this.airBoostTimer > 0 ? 22 : 14);
       if (dx * dx + dy * dy <= collectRadius * collectRadius) {
         orb.collected = true;
-        this.orbsCollected++;
+        this.scoreJudge.recordOrbCollected();
         const targetSec = orb.timeSec ?? orb.worldX / this.baseSpeed;
         const deltaMs = Math.round(Math.abs(audioSec - targetSec) * 1000);
-        const grade = this.classifyDeltaMs(deltaMs);
+        const grade = this.scoreJudge.classifyDeltaMs(deltaMs, this.difficulty);
         this.emitJudgment(grade, playerScreenX, orbY, deltaMs, orb.isBeatTarget ? 240 : 160);
       }
     }
@@ -977,7 +925,7 @@ export class GameEngine {
         if (playerBottom > trapFloorY - trap.height + 6) {
           if (this.airBoostTimer > 0 || (this.dashTimer > 0 && this.activeForm === 'treble')) {
             trap.destroyed = true;
-            this.trapsDestroyed++;
+            this.scoreJudge.recordTrapDestroyed();
             this.emitJudgment('PERFECT', playerScreenX, trapFloorY - 20, 0, 280);
           } else if (this.invulnerableTimer <= 0) {
             trap.destroyed = true;
@@ -985,7 +933,7 @@ export class GameEngine {
             this.playerVy = -430;
             this.emitJudgment('MISS', playerScreenX, this.playerY);
             this.setBanner({ key: 'trapHit' }, 1.2);
-            this.spawnBurst(playerScreenX, this.playerY, [255, 50, 95], 16);
+            this.vfx.spawnBurst(playerScreenX, this.playerY, [255, 50, 95], 16);
           }
         }
       }
@@ -997,15 +945,8 @@ export class GameEngine {
     screenY: number,
     playerWorldX: number
   ): void {
-    this.shockwaves.push({
-      x: screenX,
-      y: screenY,
-      radius: 24,
-      maxRadius: 360,
-      color: FORM_CONFIG.bass.rgb,
-      alpha: 1.0,
-    });
-    this.spawnBurst(screenX, screenY, FORM_CONFIG.bass.rgb, 20);
+    this.vfx.spawnShockwave(screenX, screenY, 24, 360, FORM_CONFIG.bass.rgb, 1.0);
+    this.vfx.spawnBurst(screenX, screenY, FORM_CONFIG.bass.rgb, 20);
 
     let shattered = 0;
     for (const trap of this.terrain.getTraps()) {
@@ -1016,10 +957,10 @@ export class GameEngine {
       ) {
         trap.destroyed = true;
         shattered++;
-        this.trapsDestroyed++;
       }
     }
     if (shattered > 0) {
+      this.scoreJudge.recordTrapDestroyed(shattered);
       this.emitJudgment('PERFECT', screenX, screenY, 0, 280 * shattered);
     }
     this.setBanner(
@@ -1041,6 +982,7 @@ export class GameEngine {
     this.focalScreenX = focalX;
     this.focalScreenY = focalY;
     this.resonanceGauge = 20;
+    this.hudDirty = true;
 
     this.audio.setAcousticZoom(targetForm);
     this.setBanner({ key: 'zoomIn', params: { form: targetForm } }, 1.5);
@@ -1060,6 +1002,7 @@ export class GameEngine {
       this.zoomScale = 1.0;
       this.rebasedZoomDisplay = 64.0;
       this.phase = 'MICRO';
+      this.hudDirty = true;
       this.microPolarity = -1;
       this.playerY = this.height * 0.34;
       this.playerRotation = 0;
@@ -1093,7 +1036,7 @@ export class GameEngine {
     this.playerRotation = 0;
 
     this.resonanceGauge = Math.min(100, this.resonanceGauge + dt * 16);
-    this.score += dt * 110 * this.combo;
+    this.scoreJudge.addRawScore(dt * 110 * this.scoreJudge.combo);
 
     for (const gate of this.microGates) {
       const dx = Math.abs(gate.worldX - playerWorldX);
@@ -1106,7 +1049,7 @@ export class GameEngine {
           gate.hit = true;
           this.resonanceGauge = Math.max(10, this.resonanceGauge - 8);
           this.emitJudgment('MISS', playerScreenX, this.playerY);
-          this.spawnBurst(playerScreenX, this.playerY, [255, 50, 95], 12);
+          this.vfx.spawnBurst(playerScreenX, this.playerY, [255, 50, 95], 12);
         }
       }
     }
@@ -1120,12 +1063,13 @@ export class GameEngine {
       this.playerController.swapForm(this.divingTargetForm);
       this.activeForm = this.playerController.form;
       this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.35);
-      this.divesCompleted++;
+      this.scoreJudge.recordDiveCompleted();
       this.phase = 'ZOOM_OUT';
+      this.hudDirty = true;
       this.transitionTimer = 0;
       this.zoomScale = 8.0;
       this.audio.setAcousticZoom('macro');
-      this.spawnBurst(
+      this.vfx.spawnBurst(
         playerScreenX,
         this.playerY,
         FORM_CONFIG[this.activeForm].rgb,
@@ -1156,58 +1100,15 @@ export class GameEngine {
       this.zoomScale = 1.0;
       this.rebasedZoomDisplay = 1.0;
       this.phase = 'MACRO';
+      this.hudDirty = true;
       this.isGrounded = true;
       this.jumpsRemaining = this.activeForm === 'synth' ? 2 : 1;
-    }
-  }
-
-  private updateVisualEffects(dt: number, stepX: number): void {
-    for (const sw of this.shockwaves) {
-      sw.radius += dt * 780;
-      sw.alpha = Math.max(0, 1 - sw.radius / sw.maxRadius);
-    }
-    this.shockwaves = this.shockwaves.filter((sw) => sw.radius < sw.maxRadius);
-
-    for (const ai of this.afterimages) {
-      ai.x -= stepX * 0.65;
-      ai.alpha -= dt * 3.2;
-    }
-    this.afterimages = this.afterimages.filter((ai) => ai.alpha > 0.05);
-
-    for (const pt of this.particles) {
-      pt.x += pt.vx * dt;
-      pt.y += pt.vy * dt;
-      pt.life += dt;
-      pt.radius = Math.max(0.5, pt.radius * (1 - dt * 1.8));
-    }
-    this.particles = this.particles.filter((pt) => pt.life < pt.maxLife);
-  }
-
-  private spawnBurst(
-    x: number,
-    y: number,
-    color: [number, number, number],
-    count: number
-  ): void {
-    for (let i = 0; i < count; i++) {
-      const angle = (Math.PI * 2 * i) / count + Math.random() * 0.35;
-      const speed = 90 + Math.random() * 260;
-      this.particles.push({
-        x,
-        y,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        radius: 3.5 + Math.random() * 4.5,
-        color,
-        alpha: 1.0,
-        life: 0,
-        maxLife: 0.38 + Math.random() * 0.25,
-      });
     }
   }
 
   private setBanner(message: BannerMessage, durationSec: number): void {
     this.statusBanner = message;
     this.statusBannerTimer = durationSec;
+    this.hudDirty = true;
   }
 }
