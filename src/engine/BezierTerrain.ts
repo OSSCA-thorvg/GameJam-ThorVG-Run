@@ -1,12 +1,16 @@
-import { REFERENCE_HEIGHT, SEGMENT_WIDTH } from '../audio/TrackAnalyzer';
+import { LEAD_IN_SEGMENTS, REFERENCE_HEIGHT, SEGMENT_WIDTH } from '../audio/TrackAnalyzer';
 import type {
   BeatTrap,
   BezierSegment,
+  DashRing,
   DivingNode,
   FrequencyBands,
+  HoldRail,
+  JumpPad,
   ResonanceFormType,
   ResonanceOrb,
   SectionIntensity,
+  SkyPlatform,
   TrackBlueprint,
 } from '../types/game';
 import { evaluateBezierFloor } from './bezierMath';
@@ -16,9 +20,10 @@ const FORMS_ORDER: ResonanceFormType[] = ['bass', 'synth', 'treble'];
 export type RuntimeTrap = BeatTrap & { screenFloorY?: number };
 
 /**
- * Streams pre-computed 2D Cubic Bezier waveform terrain, Rhythm Resonance Orbs,
- * Beat Traps, and Frequency Diving Nodes from a TrackBlueprint, with resolution
- * scaling and subtle live harmonic breathing.
+ * Streams pre-computed Hybrid Rhythm-Runner terrain:
+ * - Multi-elevation Ground Sprint Decks + Abyss Chasm Gaps (`isGap`)
+ * - One-way 2nd-Floor Sky Platforms (`SkyPlatform`)
+ * - Shrinking-ring Rhythm Beat Notes, Beat Jump Pads, Airborne Dash Rings, Hold Note Rails & Beat Traps
  */
 export class BezierTerrain {
   private allSegments: BezierSegment[] = [];
@@ -36,15 +41,28 @@ export class BezierTerrain {
   private basePortalY: Map<number, number> = new Map();
   private visibleDivingNodes: DivingNode[] = [];
 
+  private allSkyPlatforms: SkyPlatform[] = [];
+  private baseSkyY: Map<number, number> = new Map();
+  private visibleSkyPlatforms: SkyPlatform[] = [];
+
+  private allJumpPads: JumpPad[] = [];
+  private basePadY: Map<number, number> = new Map();
+  private visibleJumpPads: JumpPad[] = [];
+
+  private allDashRings: DashRing[] = [];
+  private baseRingY: Map<number, number> = new Map();
+  private visibleDashRings: DashRing[] = [];
+
+  private allHoldRails: HoldRail[] = [];
+  private baseRailY: Map<number, number> = new Map();
+  private visibleHoldRails: HoldRail[] = [];
+
   private viewportHeight: number = REFERENCE_HEIGHT;
   private refHeight: number = REFERENCE_HEIGHT;
   private segWidth: number = SEGMENT_WIDTH;
+  private leadInSegments: number = LEAD_IN_SEGMENTS;
   private hasBlueprint: boolean = false;
 
-  /**
-   * Loads a pre-computed TrackBlueprint before the run starts.
-   * Clones mutable gameplay entities so replays start fresh without re-analyzing PCM.
-   */
   public loadBlueprint(
     blueprint: TrackBlueprint,
     viewportWidth: number,
@@ -53,6 +71,7 @@ export class BezierTerrain {
     this.viewportHeight = viewportHeight;
     this.refHeight = blueprint.referenceHeight || REFERENCE_HEIGHT;
     this.segWidth = blueprint.segmentWidth || SEGMENT_WIDTH;
+    this.leadInSegments = blueprint.leadInSegments ?? LEAD_IN_SEGMENTS;
     this.hasBlueprint = true;
 
     const scaleY = viewportHeight / this.refHeight;
@@ -80,7 +99,7 @@ export class BezierTerrain {
       ...t,
       destroyed: false,
       passed: false,
-      screenFloorY: ((t as RuntimeTrap).screenFloorY ?? this.refHeight * 0.64) * scaleY,
+      screenFloorY: ((t as RuntimeTrap).screenFloorY ?? this.refHeight * 0.7) * scaleY,
     }));
 
     this.basePortalY.clear();
@@ -93,7 +112,47 @@ export class BezierTerrain {
       };
     });
 
-    this.update(0, viewportWidth, viewportHeight, 0, {
+    this.baseSkyY.clear();
+    this.allSkyPlatforms = (blueprint.skyPlatforms ?? []).map((p) => {
+      this.baseSkyY.set(p.id, p.worldY);
+      return {
+        ...p,
+        screenY: p.worldY * scaleY,
+      };
+    });
+
+    this.basePadY.clear();
+    this.allJumpPads = (blueprint.jumpPads ?? []).map((jp) => {
+      this.basePadY.set(jp.id, jp.worldY);
+      return {
+        ...jp,
+        triggered: false,
+        screenY: jp.worldY * scaleY,
+      };
+    });
+
+    this.baseRingY.clear();
+    this.allDashRings = (blueprint.dashRings ?? []).map((dr) => {
+      this.baseRingY.set(dr.id, dr.worldY);
+      return {
+        ...dr,
+        triggered: false,
+        screenY: dr.worldY * scaleY,
+      };
+    });
+
+    this.baseRailY.clear();
+    this.allHoldRails = (blueprint.holdRails ?? []).map((hr) => {
+      this.baseRailY.set(hr.id, hr.worldY);
+      return {
+        ...hr,
+        active: false,
+        completed: false,
+        screenY: hr.worldY * scaleY,
+      };
+    });
+
+    this.update(-viewportWidth * 0.24, viewportWidth, viewportHeight, 0, {
       low: 0.2,
       mid: 0.2,
       high: 0.2,
@@ -102,9 +161,6 @@ export class BezierTerrain {
     });
   }
 
-  /**
-   * Fallback reset when no blueprint is loaded yet.
-   */
   public reset(viewportWidth: number, viewportHeight: number): void {
     this.viewportHeight = viewportHeight;
     if (this.hasBlueprint && this.baseSegments.length > 0) {
@@ -129,7 +185,23 @@ export class BezierTerrain {
         node.activated = false;
         node.worldY = (this.basePortalY.get(node.id) ?? node.worldY) * scaleY;
       }
-      this.update(0, viewportWidth, viewportHeight, 0, {
+      for (const plat of this.allSkyPlatforms) {
+        plat.screenY = (this.baseSkyY.get(plat.id) ?? plat.worldY) * scaleY;
+      }
+      for (const pad of this.allJumpPads) {
+        pad.triggered = false;
+        pad.screenY = (this.basePadY.get(pad.id) ?? pad.worldY) * scaleY;
+      }
+      for (const ring of this.allDashRings) {
+        ring.triggered = false;
+        ring.screenY = (this.baseRingY.get(ring.id) ?? ring.worldY) * scaleY;
+      }
+      for (const rail of this.allHoldRails) {
+        rail.active = false;
+        rail.completed = false;
+        rail.screenY = (this.baseRailY.get(rail.id) ?? rail.worldY) * scaleY;
+      }
+      this.update(-viewportWidth * 0.24, viewportWidth, viewportHeight, 0, {
         low: 0.2,
         mid: 0.2,
         high: 0.2,
@@ -139,30 +211,30 @@ export class BezierTerrain {
       return;
     }
 
-    // Minimal procedural fallback if started without blueprint
+    // Minimal flat sprint fallback
     this.baseSegments = [];
     this.allSegments = [];
-    const baseFloor = viewportHeight * 0.64;
-    for (let i = -1; i < 40; i++) {
+    this.leadInSegments = 4;
+    const baseFloor = viewportHeight * 0.7;
+    for (let i = -this.leadInSegments; i < 40; i++) {
       const x0 = i * this.segWidth;
       const x1 = (i + 1) * this.segWidth;
-      const y0 = baseFloor + Math.sin(i * 0.8) * 50;
-      const y1 = baseFloor + Math.sin((i + 1) * 0.8) * 50;
       const seg: BezierSegment = {
         x0,
-        y0,
+        y0: baseFloor,
         cx1: x0 + this.segWidth * 0.35,
-        cy1: y0,
+        cy1: baseFloor,
         cx2: x0 + this.segWidth * 0.65,
-        cy2: y1,
+        cy2: baseFloor,
         x1,
-        y1,
+        y1: baseFloor,
         energyBand: FORMS_ORDER[Math.abs(i) % FORMS_ORDER.length]!,
+        isGap: false,
       };
       this.baseSegments.push({ ...seg });
       this.allSegments.push(seg);
     }
-    this.visibleSegments = this.allSegments.slice(0, 16);
+    this.visibleSegments = this.allSegments.slice(0, 18);
   }
 
   public update(
@@ -177,11 +249,11 @@ export class BezierTerrain {
     const minX = cameraX - this.segWidth * 2;
     const maxX = cameraX + viewportWidth + this.segWidth * 4;
 
-    // 1. Slice visible Bezier segments using direct index calculation (O(1) window)
-    const startIdx = Math.max(0, Math.floor(minX / this.segWidth));
+    // 1. Slice visible segments using lead-in-aware index offset (supports negative worldX!)
+    const startIdx = Math.max(0, Math.floor(minX / this.segWidth) + this.leadInSegments - 1);
     const endIdx = Math.min(
       this.allSegments.length - 1,
-      Math.ceil(maxX / this.segWidth) + 2
+      Math.ceil(maxX / this.segWidth) + this.leadInSegments + 2
     );
 
     this.visibleSegments = [];
@@ -190,45 +262,28 @@ export class BezierTerrain {
       const base = this.baseSegments[i];
       if (!seg || !base) continue;
 
-      const bandEnergy =
-        seg.energyBand === 'bass'
-          ? freq.low
-          : seg.energyBand === 'synth'
-          ? freq.mid
-          : freq.high;
-
-      // Preserve the pre-computed musical mountain/valley anchor points (y0, y1)
-      // while adding subtle live harmonic breathing to the control handles (cy1, cy2)
-      const harmonicBreath = (6 + bandEnergy * 18) * scaleY;
-      const mod1 = Math.sin(timeSec * 6.5 + i * 0.9) * harmonicBreath;
-      const mod2 = Math.cos(timeSec * 5.8 + i * 1.1) * harmonicBreath;
-
+      // Keep running decks crisp and solid (only micro-pulse control handles slightly on strong bass)
+      const pulse = freq.isBeat ? 2.5 * scaleY : 0;
       seg.y0 = base.y0 * scaleY;
       seg.y1 = base.y1 * scaleY;
-      seg.cy1 = base.cy1 * scaleY + mod1;
-      seg.cy2 = base.cy2 * scaleY + mod2;
-
+      seg.cy1 = base.cy1 * scaleY - pulse;
+      seg.cy2 = base.cy2 * scaleY - pulse;
       this.visibleSegments.push(seg);
     }
 
-    const fallbackY = viewportHeight * 0.64;
+    const fallbackY = viewportHeight * 0.7;
 
-    // 2. Filter visible Rhythm Resonance Orbs & keep contour orbs locked to live curve
+    // 2. Visible Rhythm Beat Notes
     this.visibleOrbs = [];
     for (let i = 0; i < this.allOrbs.length; i++) {
       const orb = this.allOrbs[i]!;
       if (orb.collected || orb.worldX < minX || orb.worldX > maxX) continue;
-      if (orb.isArcOrb) {
-        const baseY = this.baseOrbY.get(orb.id) ?? orb.worldY;
-        orb.screenY = baseY * scaleY + Math.sin(timeSec * 5 + orb.id) * 4;
-      } else {
-        const { floorY } = evaluateBezierFloor(this.visibleSegments, orb.worldX, fallbackY);
-        orb.screenY = floorY - 26 * scaleY;
-      }
+      const baseY = this.baseOrbY.get(orb.id) ?? orb.worldY;
+      orb.screenY = baseY * scaleY + Math.sin(timeSec * 6 + orb.id * 0.5) * 2.5;
       this.visibleOrbs.push(orb);
     }
 
-    // 3. Filter visible Beat Traps & anchor to floor
+    // 3. Visible Beat Traps anchored to ground road
     this.visibleTraps = [];
     for (let i = 0; i < this.allTraps.length; i++) {
       const trap = this.allTraps[i]!;
@@ -238,7 +293,7 @@ export class BezierTerrain {
       this.visibleTraps.push(trap);
     }
 
-    // 4. Filter visible Frequency Diving Nodes
+    // 4. Visible Frequency Diving Portals
     this.visibleDivingNodes = [];
     for (let i = 0; i < this.allDivingNodes.length; i++) {
       const node = this.allDivingNodes[i]!;
@@ -247,15 +302,56 @@ export class BezierTerrain {
       node.worldY = baseY * scaleY;
       this.visibleDivingNodes.push(node);
     }
+
+    // 5. Visible 2F Sky Platforms
+    this.visibleSkyPlatforms = [];
+    for (let i = 0; i < this.allSkyPlatforms.length; i++) {
+      const plat = this.allSkyPlatforms[i]!;
+      if (plat.x1 < minX || plat.x0 > maxX) continue;
+      const baseY = this.baseSkyY.get(plat.id) ?? plat.worldY;
+      plat.screenY = baseY * scaleY;
+      this.visibleSkyPlatforms.push(plat);
+    }
+
+    // 6. Visible Beat Jump Pads
+    this.visibleJumpPads = [];
+    for (let i = 0; i < this.allJumpPads.length; i++) {
+      const pad = this.allJumpPads[i]!;
+      if (pad.worldX < minX || pad.worldX > maxX) continue;
+      const baseY = this.basePadY.get(pad.id) ?? pad.worldY;
+      pad.screenY = baseY * scaleY;
+      this.visibleJumpPads.push(pad);
+    }
+
+    // 7. Visible Airborne Dash Rings
+    this.visibleDashRings = [];
+    for (let i = 0; i < this.allDashRings.length; i++) {
+      const ring = this.allDashRings[i]!;
+      if (ring.triggered || ring.worldX < minX || ring.worldX > maxX) continue;
+      const baseY = this.baseRingY.get(ring.id) ?? ring.worldY;
+      ring.screenY = baseY * scaleY;
+      this.visibleDashRings.push(ring);
+    }
+
+    // 8. Visible Hold Note Rails
+    this.visibleHoldRails = [];
+    for (let i = 0; i < this.allHoldRails.length; i++) {
+      const rail = this.allHoldRails[i]!;
+      if (rail.x1 < minX || rail.x0 > maxX) continue;
+      const baseY = this.baseRailY.get(rail.id) ?? rail.worldY;
+      rail.screenY = baseY * scaleY;
+      this.visibleHoldRails.push(rail);
+    }
   }
 
   public sampleFloor(worldX: number): {
     floorY: number;
     slope: number;
     angleRad: number;
+    isGap: boolean;
     segment?: BezierSegment;
   } {
-    const fallbackY = this.viewportHeight * 0.64;
+    const fallbackY = this.viewportHeight * 0.7;
     const res = evaluateBezierFloor(this.visibleSegments, worldX, fallbackY);
     let matchedSeg: BezierSegment | undefined;
     for (let i = 0; i < this.visibleSegments.length; i++) {
@@ -265,7 +361,33 @@ export class BezierTerrain {
         break;
       }
     }
-    return { ...res, segment: matchedSeg };
+    return {
+      ...res,
+      isGap: Boolean(matchedSeg?.isGap),
+      segment: matchedSeg,
+    };
+  }
+
+  /**
+   * One-way 2F Sky Platform collision: lands when crossing downward onto the platform surface
+   * unless holding Fast-Drop (`dropThrough`).
+   */
+  public sampleSkyPlatform(
+    worldX: number,
+    prevBottomY: number,
+    nextBottomY: number,
+    dropThrough: boolean
+  ): SkyPlatform | null {
+    if (dropThrough) return null;
+    for (let i = 0; i < this.visibleSkyPlatforms.length; i++) {
+      const plat = this.visibleSkyPlatforms[i]!;
+      if (worldX < plat.x0 - 10 || worldX > plat.x1 + 10) continue;
+      const py = plat.screenY ?? plat.worldY;
+      if (prevBottomY <= py + 16 && nextBottomY >= py - 2) {
+        return plat;
+      }
+    }
+    return null;
   }
 
   public getSectionIntensityAt(worldX: number): SectionIntensity {
@@ -291,5 +413,21 @@ export class BezierTerrain {
 
   public getDivingNodes(): DivingNode[] {
     return this.visibleDivingNodes;
+  }
+
+  public getSkyPlatforms(): SkyPlatform[] {
+    return this.visibleSkyPlatforms;
+  }
+
+  public getJumpPads(): JumpPad[] {
+    return this.visibleJumpPads;
+  }
+
+  public getDashRings(): DashRing[] {
+    return this.visibleDashRings;
+  }
+
+  public getHoldRails(): HoldRail[] {
+    return this.visibleHoldRails;
   }
 }
