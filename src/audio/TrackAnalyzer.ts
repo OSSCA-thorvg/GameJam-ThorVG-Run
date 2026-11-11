@@ -1,7 +1,6 @@
 import { evaluateCubicBezier } from '../engine/bezierMath';
 import {
   DIFFICULTY_CONFIG,
-  type AudioSlice,
   type BeatTrap,
   type BezierSegment,
   type DashRing,
@@ -10,302 +9,111 @@ import {
   type HoldRail,
   type JumpPad,
   type LoadingProgress,
-  type ResonanceFormType,
   type ResonanceOrb,
-  type SectionIntensity,
   type SkyPlatform,
   type TrackBlueprint,
   type TrackMetadata,
 } from '../types/game';
+import {
+  extractAudioSlicesAndBeats,
+  nextFrame,
+  SLICE_DURATION_SEC,
+  type DetectedBeatEvent,
+  type DifficultyDspTuning,
+  type DspAnalysisResult,
+} from './dsp/beatDetector';
 
+export { SLICE_DURATION_SEC };
 export const REFERENCE_HEIGHT = 720;
-export const WORLD_PX_PER_SEC = DIFFICULTY_CONFIG.normal.worldPxPerSec; // 550px/s default
-export const SLICE_DURATION_SEC = 0.25;
+export const WORLD_PX_PER_SEC = DIFFICULTY_CONFIG.normal.worldPxPerSec;
 export const SEGMENT_WIDTH = WORLD_PX_PER_SEC * SLICE_DURATION_SEC;
 export const LEAD_IN_SEGMENTS = 8;
 
-const blueprintCache = new Map<string, TrackBlueprint>();
-
-interface BeatEvent {
-  timeSec: number;
-  worldX: number;
-  strength: number;
-  band: ResonanceFormType;
-  intensity: SectionIntensity;
-}
-
-function nextFrame(): Promise<void> {
-  return new Promise((resolve) => {
-    if (typeof requestAnimationFrame === 'function') {
-      requestAnimationFrame(() => resolve());
-    } else {
-      setTimeout(resolve, 0);
-    }
-  });
-}
-
-function percentile(values: number[], q: number): number {
-  if (values.length === 0) return 1;
-  const sorted = [...values].sort((a, b) => a - b);
-  const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor(sorted.length * q)));
-  return sorted[idx] || 1;
-}
+const DECK_HEIGHTS: readonly [number, number, number] = [506, 466, 426];
 
 /**
- * Pre-computes a 1:1 Beat-Synced Hybrid Rhythm-Runner Course:
- * - Sub-20ms spectral-flux beat onset peak detection
- * - Solid multi-elevation sprint decks + chasm gaps (`isGap`) + 2F sky platforms
- * - Shrinking-ring Rhythm Beat Notes, Beat Jump Pads, Airborne Dash Rings, Hold Note Rails & Beat Traps
+ * Data-Driven Type Object Pattern:
+ * Centralizes all level-generation density, spacing, and beat-picking thresholds per difficulty
+ * so game designers can tune rhythm-runner pacing in one table without touching procedural logic.
  */
-export async function analyzeTrackBlueprint(
-  buffer: AudioBuffer,
-  track: TrackMetadata,
-  onProgress?: (status: LoadingProgress) => void,
-  difficulty: DifficultyMode = 'normal'
-): Promise<TrackBlueprint> {
-  const diffCfg = DIFFICULTY_CONFIG[difficulty];
-  const worldPxPerSec = diffCfg.worldPxPerSec;
-  const segWidth = worldPxPerSec * SLICE_DURATION_SEC;
-  const cacheKey = `${track.id}:${difficulty}`;
+export interface CourseTuningProfile extends DifficultyDspTuning {
+  minGapIntervalSlices: number;
+  allowCalmGaps: boolean;
+  minSkyGapPx: number;
+  minTrapGapPx: number;
+  minTrapStrength: number;
+  trapModulo: number;
+  minNoteSpacingPx: number;
+}
 
-  const cached = blueprintCache.get(cacheKey);
-  if (cached) {
-    onProgress?.({ progress: 0.45, stage: 'analyzingBands' });
-    await nextFrame();
-    onProgress?.({ progress: 0.82, stage: 'buildingWaveform' });
-    await nextFrame();
-    onProgress?.({ progress: 1.0, stage: 'ready', blueprint: cached });
-    return cached;
+export const DIFFICULTY_COURSE_TUNING: Record<DifficultyMode, CourseTuningProfile> = {
+  easy: {
+    minBeatGapSec: 0.36,
+    fluxGate: 0.085,
+    minGapIntervalSlices: 20,
+    allowCalmGaps: false,
+    minSkyGapPx: 2200,
+    minTrapGapPx: 760,
+    minTrapStrength: 0.56,
+    trapModulo: 3,
+    minNoteSpacingPx: 195,
+  },
+  normal: {
+    minBeatGapSec: 0.27,
+    fluxGate: 0.068,
+    minGapIntervalSlices: 14,
+    allowCalmGaps: true,
+    minSkyGapPx: 1750,
+    minTrapGapPx: 560,
+    minTrapStrength: 0.42,
+    trapModulo: 2,
+    minNoteSpacingPx: 145,
+  },
+  hard: {
+    minBeatGapSec: 0.2,
+    fluxGate: 0.055,
+    minGapIntervalSlices: 11,
+    allowCalmGaps: true,
+    minSkyGapPx: 1450,
+    minTrapGapPx: 430,
+    minTrapStrength: 0.42,
+    trapModulo: 2,
+    minNoteSpacingPx: 115,
+  },
+};
+
+const blueprintCache = new Map<string, TrackBlueprint>();
+
+class GroundOccupancy {
+  private readonly ranges: Array<[number, number]> = [];
+
+  public isBusy(x0: number, x1: number): boolean {
+    return this.ranges.some(([a, b]) => x0 <= b && x1 >= a);
   }
 
-  onProgress?.({ progress: 0.2, stage: 'analyzingBands' });
-  await nextFrame();
-
-  const sampleRate = buffer.sampleRate;
-  const totalSamples = buffer.length;
-  const durationSec = buffer.duration;
-  const ch0 = buffer.getChannelData(0);
-  const ch1 = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : null;
-
-  // Stage 1: Fine-grained 20ms (50 Hz) 3-band envelope extraction for sub-20ms beat accuracy
-  const hopSec = 0.02;
-  const hopSamples = Math.max(1, Math.floor(sampleRate * hopSec));
-  const totalHops = Math.max(32, Math.ceil(durationSec / hopSec));
-
-  const stride = 4;
-  const effRate = sampleRate / stride;
-  const alphaLow = (2 * Math.PI * 220) / (effRate + 2 * Math.PI * 220);
-  const alphaMid = (2 * Math.PI * 3400) / (effRate + 2 * Math.PI * 3400);
-
-  const hopLow = new Float32Array(totalHops);
-  const hopMid = new Float32Array(totalHops);
-  const hopHigh = new Float32Array(totalHops);
-
-  let lpLow = 0;
-  let lpMid = 0;
-
-  for (let h = 0; h < totalHops; h++) {
-    const startSample = h * hopSamples;
-    const endSample = Math.min(totalSamples, startSample + hopSamples);
-    let sumLowSq = 0;
-    let sumMidSq = 0;
-    let sumHighSq = 0;
-    let count = 0;
-
-    for (let s = startSample; s < endSample; s += stride) {
-      const mono = ch1 ? (ch0[s]! + ch1[s]!) * 0.5 : ch0[s]!;
-      lpLow += alphaLow * (mono - lpLow);
-      lpMid += alphaMid * (mono - lpMid);
-
-      const lowBand = lpLow;
-      const midBand = lpMid - lpLow;
-      const highBand = mono - lpMid;
-
-      sumLowSq += lowBand * lowBand;
-      sumMidSq += midBand * midBand;
-      sumHighSq += highBand * highBand;
-      count++;
-    }
-
-    if (count > 0) {
-      hopLow[h] = Math.sqrt(sumLowSq / count);
-      hopMid[h] = Math.sqrt(sumMidSq / count);
-      hopHigh[h] = Math.sqrt(sumHighSq / count);
-    }
-
-    if (h > 0 && h % 1800 === 0) {
-      onProgress?.({
-        progress: 0.2 + (h / totalHops) * 0.35,
-        stage: 'analyzingBands',
-      });
-      await nextFrame();
-    }
+  public reserve(x0: number, x1: number): void {
+    this.ranges.push([x0, x1]);
   }
+}
 
-  // Normalize against 95th percentile
-  const sampleLowArr = Array.from(hopLow);
-  const sampleMidArr = Array.from(hopMid);
-  const sampleHighArr = Array.from(hopHigh);
-  const normLowDenom = Math.max(1e-4, percentile(sampleLowArr, 0.95));
-  const normMidDenom = Math.max(1e-4, percentile(sampleMidArr, 0.95));
-  const normHighDenom = Math.max(1e-4, percentile(sampleHighArr, 0.95));
+interface BuiltRoadTopology {
+  segments: BezierSegment[];
+  divingNodes: DivingNode[];
+  gapSliceSet: Set<number>;
+  nearPortal: (wx: number, margin?: number) => boolean;
+  floorAtWorldX: (wx: number) => { y: number; isGap: boolean; seg: BezierSegment };
+  nextEntityId: number;
+}
 
-  const nLow = new Float32Array(totalHops);
-  const nMid = new Float32Array(totalHops);
-  const nHigh = new Float32Array(totalHops);
-  const nOverall = new Float32Array(totalHops);
-  const fluxArr = new Float32Array(totalHops);
-
-  for (let h = 0; h < totalHops; h++) {
-    const l = Math.min(1.0, hopLow[h]! / normLowDenom);
-    const m = Math.min(1.0, hopMid[h]! / normMidDenom);
-    const hi = Math.min(1.0, hopHigh[h]! / normHighDenom);
-    nLow[h] = l;
-    nMid[h] = m;
-    nHigh[h] = hi;
-    nOverall[h] = Math.min(1.0, l * 0.45 + m * 0.35 + hi * 0.2);
-
-    if (h > 0) {
-      const dl = Math.max(0, l - nLow[h - 1]!);
-      const dm = Math.max(0, m - nMid[h - 1]!);
-      const dhi = Math.max(0, hi - nHigh[h - 1]!);
-      fluxArr[h] = dl * 0.62 + dm * 0.26 + dhi * 0.12;
-    }
-  }
-
-  // Stage 2: Aggregate 0.25s terrain slices & classify Calm / Groove / Drop sections
-  const totalSlices = Math.max(16, Math.ceil(durationSec / SLICE_DURATION_SEC));
-  const hopsPerSlice = Math.max(1, Math.round(SLICE_DURATION_SEC / hopSec)); // 12 or 13 hops
-  const sliceOverall: number[] = new Array(totalSlices).fill(0);
-  const sliceLow: number[] = new Array(totalSlices).fill(0);
-  const sliceMid: number[] = new Array(totalSlices).fill(0);
-  const sliceHigh: number[] = new Array(totalSlices).fill(0);
-
-  for (let i = 0; i < totalSlices; i++) {
-    const h0 = i * hopsPerSlice;
-    const h1 = Math.min(totalHops, h0 + hopsPerSlice);
-    let sl = 0;
-    let sm = 0;
-    let sh = 0;
-    let cnt = 0;
-    for (let h = h0; h < h1; h++) {
-      sl += nLow[h]!;
-      sm += nMid[h]!;
-      sh += nHigh[h]!;
-      cnt++;
-    }
-    if (cnt > 0) {
-      sliceLow[i] = sl / cnt;
-      sliceMid[i] = sm / cnt;
-      sliceHigh[i] = sh / cnt;
-      sliceOverall[i] = Math.min(1.0, sliceLow[i]! * 0.45 + sliceMid[i]! * 0.35 + sliceHigh[i]! * 0.2);
-    }
-  }
-
-  const rollingEnergy: number[] = new Array(totalSlices).fill(0);
-  const windowRadius = 6; // ±1.5s
-  for (let i = 0; i < totalSlices; i++) {
-    let sum = 0;
-    let cnt = 0;
-    for (let k = Math.max(0, i - windowRadius); k <= Math.min(totalSlices - 1, i + windowRadius); k++) {
-      sum += sliceOverall[k]!;
-      cnt++;
-    }
-    rollingEnergy[i] = cnt > 0 ? sum / cnt : 0.2;
-  }
-
-  const calmThreshold = Math.max(0.22, Math.min(0.44, percentile(rollingEnergy, 0.32)));
-  const dropThreshold = Math.max(calmThreshold + 0.13, Math.min(0.75, percentile(rollingEnergy, 0.67)));
-
-  const sectionCounts: Record<SectionIntensity, number> = { calm: 0, groove: 0, drop: 0 };
-  const sliceIntensity: SectionIntensity[] = new Array(totalSlices).fill('groove');
-  const sliceBand: ResonanceFormType[] = new Array(totalSlices).fill('synth');
-
-  for (let i = 0; i < totalSlices; i++) {
-    const l = sliceLow[i]!;
-    const m = sliceMid[i]!;
-    const hi = sliceHigh[i]!;
-    sliceBand[i] = l >= m && l >= hi ? 'bass' : m >= hi ? 'synth' : 'treble';
-
-    const roll = rollingEnergy[i]!;
-    const inten: SectionIntensity =
-      roll >= dropThreshold ? 'drop' : roll >= calmThreshold ? 'groove' : 'calm';
-    sliceIntensity[i] = inten;
-    sectionCounts[inten]++;
-  }
-
-  // Exact 20ms peak-picking for musical beat onsets
-  const minBeatGapSec = difficulty === 'hard' ? 0.2 : difficulty === 'easy' ? 0.36 : 0.27;
-  const minBeatGapHops = Math.max(2, Math.round(minBeatGapSec / hopSec));
-  const fluxGate = difficulty === 'hard' ? 0.055 : difficulty === 'easy' ? 0.085 : 0.068;
-
-  const beatEvents: BeatEvent[] = [];
-  const sliceHasBeat = new Set<number>();
-  let lastBeatHop = -minBeatGapHops;
-
-  for (let h = Math.round(0.8 / hopSec); h < totalHops - Math.round(1.0 / hopSec); h++) {
-    if (h - lastBeatHop < minBeatGapHops) continue;
-    const f = fluxArr[h]!;
-    if (f < fluxGate) continue;
-
-    // Local flux peak within ±1 hop (20ms precision!)
-    if (f < fluxArr[h - 1]! || f < fluxArr[h + 1]!) continue;
-
-    // Compare against local ±0.4s flux background
-    let localSum = 0;
-    let localCnt = 0;
-    for (let k = Math.max(1, h - 20); k <= Math.min(totalHops - 1, h + 20); k++) {
-      localSum += fluxArr[k]!;
-      localCnt++;
-    }
-    const localMean = localCnt > 0 ? localSum / localCnt : 0;
-    if (f < localMean * 1.45 + 0.024) continue;
-
-    lastBeatHop = h;
-    const timeSec = Number((h * hopSec).toFixed(3));
-    const sIdx = Math.min(totalSlices - 1, Math.floor(timeSec / SLICE_DURATION_SEC));
-    sliceHasBeat.add(sIdx);
-
-    const l = nLow[h]!;
-    const m = nMid[h]!;
-    const hi = nHigh[h]!;
-    const band: ResonanceFormType = l >= m && l >= hi ? 'bass' : m >= hi ? 'synth' : 'treble';
-
-    beatEvents.push({
-      timeSec,
-      worldX: timeSec * worldPxPerSec,
-      strength: Math.min(1.0, f * 3.2 + nOverall[h]! * 0.35),
-      band,
-      intensity: sliceIntensity[sIdx] ?? 'groove',
-    });
-  }
-
-  const slices: AudioSlice[] = [];
-  for (let i = 0; i < totalSlices; i++) {
-    slices.push({
-      index: i,
-      timeSec: i * SLICE_DURATION_SEC,
-      worldX0: i * segWidth,
-      worldX1: (i + 1) * segWidth,
-      low: sliceLow[i]!,
-      mid: sliceMid[i]!,
-      high: sliceHigh[i]!,
-      overall: sliceOverall[i]!,
-      dominantBand: sliceBand[i]!,
-      intensity: sliceIntensity[i]!,
-      isBeatOnset: sliceHasBeat.has(i),
-    });
-  }
-
-  onProgress?.({ progress: 0.65, stage: 'buildingWaveform' });
-  await nextFrame();
-
-  // Stage 3: Build Grounded Multi-Deck Running Road + Chasm Gaps (`isGap`)
-  const deckHeights: [number, number, number] = [506, 466, 426]; // Low / Mid / High ground road Y
+function buildRoadTopology(
+  dsp: DspAnalysisResult,
+  segWidth: number,
+  tuning: CourseTuningProfile
+): BuiltRoadTopology {
+  const { totalSlices, slices, sliceIntensity, sliceBand, sliceHasBeat } = dsp;
   const segments: BezierSegment[] = [];
+  const startDeckY = DECK_HEIGHTS[0];
 
-  // Lead-in segments covering [-LEAD_IN_SEGMENTS * segWidth .. 0] so cameraX < 0 at start is fully paved
-  const startDeckY = deckHeights[0];
   for (let li = -LEAD_IN_SEGMENTS; li < 0; li++) {
     const x0 = li * segWidth;
     const x1 = (li + 1) * segWidth;
@@ -333,13 +141,12 @@ export async function analyzeTrackBlueprint(
     });
   }
 
-  // Decide phrase deck levels (every 12 slices = 3.0s) and chasm gap slices
   const totalWithRunway = totalSlices + 8;
   const sliceDeckLevel: Array<0 | 1 | 2> = new Array(totalWithRunway).fill(0);
   const gapSliceSet = new Set<number>();
 
   let curDeck: 0 | 1 | 2 = 0;
-  const phraseLen = 12; // 3.0s solid running stretches!
+  const phraseLen = 12; // 3.0s solid running stretches
   for (let p = 1; p * phraseLen < totalSlices - 6; p++) {
     const startIdx = p * phraseLen;
     const inten = sliceIntensity[startIdx] ?? 'groove';
@@ -355,10 +162,9 @@ export async function analyzeTrackBlueprint(
     }
   }
 
-  // Schedule Frequency Diving Portals first so gaps/traps never collide with portals
   const divingNodes: DivingNode[] = [];
   const portalWorldXs: number[] = [];
-  let nextId = 1;
+  let nextEntityId = 1;
   let lastPortalSec = 8.0;
 
   for (let i = 36; i < totalSlices - 16; i++) {
@@ -370,11 +176,11 @@ export async function analyzeTrackBlueprint(
 
     if (sec - lastPortalSec >= 18.0 || (isUpgrade && sec - lastPortalSec >= 11.5)) {
       lastPortalSec = sec;
-      const deckY = deckHeights[sliceDeckLevel[i] ?? 0];
+      const deckY = DECK_HEIGHTS[sliceDeckLevel[i] ?? 0];
       const wx = (i + 0.5) * segWidth;
       portalWorldXs.push(wx);
       divingNodes.push({
-        id: nextId++,
+        id: nextEntityId++,
         worldX: wx,
         worldY: deckY - 68,
         radius: 30,
@@ -387,18 +193,15 @@ export async function analyzeTrackBlueprint(
   const nearPortal = (wx: number, margin: number = 420): boolean =>
     portalWorldXs.some((px) => Math.abs(px - wx) < margin);
 
-  // Schedule Abyss Chasm Gaps (`isGap: true`, 2 slices = 0.50s wide) at energetic beat transitions
-  const minGapIntervalSlices = difficulty === 'hard' ? 11 : difficulty === 'easy' ? 20 : 14;
   let lastGapSlice = 10;
   for (let i = 16; i < totalSlices - 12; i++) {
-    if (i - lastGapSlice < minGapIntervalSlices) continue;
+    if (i - lastGapSlice < tuning.minGapIntervalSlices) continue;
     const inten = sliceIntensity[i] ?? 'calm';
-    if (inten === 'calm' && difficulty === 'easy') continue;
+    if (inten === 'calm' && !tuning.allowCalmGaps) continue;
     if (!sliceHasBeat.has(i)) continue;
     const wx = i * segWidth;
     if (nearPortal(wx, 520)) continue;
 
-    // Flatten deck level around the gap so takeoff and landing are clean and readable
     const takeoffLevel = sliceDeckLevel[i - 1] ?? 0;
     sliceDeckLevel[i - 1] = takeoffLevel;
     sliceDeckLevel[i] = takeoffLevel;
@@ -417,24 +220,18 @@ export async function analyzeTrackBlueprint(
     const x0 = i * segWidth;
     const x1 = (i + 1) * segWidth;
     const level = sliceDeckLevel[i] ?? 0;
-    const targetY = deckHeights[level];
+    const targetY = DECK_HEIGHTS[level];
     const isGap = gapSliceSet.has(i);
 
-    // Smooth 1-segment S-curve ramp when stepping between deck elevations; rock-solid flat road otherwise!
     const y0 = prevY;
     const y1 = targetY;
-    const cx1 = x0 + segWidth * 0.38;
-    const cy1 = y0;
-    const cx2 = x0 + segWidth * 0.62;
-    const cy2 = y1;
-
     segments.push({
       x0,
       y0,
-      cx1,
-      cy1,
-      cx2,
-      cy2,
+      cx1: x0 + segWidth * 0.38,
+      cy1: y0,
+      cx2: x0 + segWidth * 0.62,
+      cy2: y1,
       x1,
       y1,
       energyBand: slice.dominantBand,
@@ -450,7 +247,6 @@ export async function analyzeTrackBlueprint(
       isGap,
       deckLevel: level,
     });
-
     prevY = y1;
   }
 
@@ -468,38 +264,70 @@ export async function analyzeTrackBlueprint(
     };
   };
 
+  return { segments, divingNodes, gapSliceSet, nearPortal, floorAtWorldX, nextEntityId };
+}
+
+/**
+ * Pre-computes a 1:1 Beat-Synced Hybrid Rhythm-Runner Course via a 4-stage pipeline:
+ * 1. Audio PCM Decode -> 2. 20ms DSP Spectral-Flux Beat Extraction ->
+ * 3. Multi-Deck & Chasm Topology -> 4. Gimmick, Sky Platform, Trap & Beat Note Placement.
+ */
+export async function analyzeTrackBlueprint(
+  buffer: AudioBuffer,
+  track: TrackMetadata,
+  onProgress?: (status: LoadingProgress) => void,
+  difficulty: DifficultyMode = 'normal'
+): Promise<TrackBlueprint> {
+  const diffCfg = DIFFICULTY_CONFIG[difficulty];
+  const tuning = DIFFICULTY_COURSE_TUNING[difficulty];
+  const worldPxPerSec = diffCfg.worldPxPerSec;
+  const segWidth = worldPxPerSec * SLICE_DURATION_SEC;
+  const cacheKey = `${track.id}:${difficulty}`;
+
+  const cached = blueprintCache.get(cacheKey);
+  if (cached) {
+    onProgress?.({ progress: 0.45, stage: 'analyzingBands' });
+    await nextFrame();
+    onProgress?.({ progress: 0.82, stage: 'buildingWaveform' });
+    await nextFrame();
+    onProgress?.({ progress: 1.0, stage: 'ready', blueprint: cached });
+    return cached;
+  }
+
+  onProgress?.({ progress: 0.2, stage: 'analyzingBands' });
+  await nextFrame();
+
+  const dsp = await extractAudioSlicesAndBeats(buffer, worldPxPerSec, tuning, onProgress);
+
+  onProgress?.({ progress: 0.65, stage: 'buildingWaveform' });
+  await nextFrame();
+
+  const road = buildRoadTopology(dsp, segWidth, tuning);
+  let nextId = road.nextEntityId;
+
   onProgress?.({ progress: 0.85, stage: 'placingObjects' });
   await nextFrame();
 
-  // Stage 4: Place Sky Platforms, 3 Track Gimmicks (JumpPads, DashRings, HoldRails), Beat Traps & Rhythm Notes
   const orbs: ResonanceOrb[] = [];
   const traps: BeatTrap[] = [];
   const skyPlatforms: SkyPlatform[] = [];
   const jumpPads: JumpPad[] = [];
   const dashRings: DashRing[] = [];
   const holdRails: HoldRail[] = [];
+  const ground = new GroundOccupancy();
 
-  // Track occupied X intervals on the ground so objects never overlap unfairly
-  const occupiedGround: Array<[number, number]> = [];
-  const isGroundBusy = (x0: number, x1: number): boolean =>
-    occupiedGround.some(([a, b]) => x0 <= b && x1 >= a);
-  const reserveGround = (x0: number, x1: number): void => {
-    occupiedGround.push([x0, x1]);
-  };
-
-  // 4A. Equip every Abyss Chasm Gap with either a Takeoff Jump Pad OR an Airborne Dash Ring + Jump Guide Arc!
+  // 4A. Chasm Gap Gimmicks (alternating Airborne Dash Ring vs Takeoff Jump Pad + Parabolic Note Arc)
   let gapPatternToggle = 0;
-  for (let i = 16; i < totalSlices - 12; i++) {
-    if (!gapSliceSet.has(i) || gapSliceSet.has(i - 1)) continue;
+  for (let i = 16; i < dsp.totalSlices - 12; i++) {
+    if (!road.gapSliceSet.has(i) || road.gapSliceSet.has(i - 1)) continue;
     const gapStartX = i * segWidth;
     const gapEndX = (i + 2) * segWidth;
     const gapSpan = gapEndX - gapStartX;
-    const { y: takeoffY, seg } = floorAtWorldX(gapStartX - 16);
+    const { y: takeoffY, seg } = road.floorAtWorldX(gapStartX - 16);
     const band = seg.energyBand;
-    reserveGround(gapStartX - 110, gapEndX + 95);
+    ground.reserve(gapStartX - 110, gapEndX + 95);
 
     if (gapPatternToggle % 2 === 0) {
-      // Airborne Dash Ring suspended above the chasm!
       const ringX = gapStartX + gapSpan * 0.34;
       const ringY = takeoffY - 82;
       dashRings.push({
@@ -510,7 +338,6 @@ export async function analyzeTrackBlueprint(
         timeSec: ringX / worldPxPerSec,
         triggered: false,
       });
-      // Trail of 3 airborne notes out of the Dash Ring
       for (let k = 1; k <= 3; k++) {
         const nx = ringX + k * 68;
         orbs.push({
@@ -526,7 +353,6 @@ export async function analyzeTrackBlueprint(
         });
       }
     } else {
-      // Beat Jump Pad right at the chasm takeoff edge!
       const padX = gapStartX - 28;
       jumpPads.push({
         id: nextId++,
@@ -535,7 +361,6 @@ export async function analyzeTrackBlueprint(
         timeSec: padX / worldPxPerSec,
         triggered: false,
       });
-      // High parabolic arc of 4 rhythm notes soaring across the chasm
       for (let k = 0; k < 4; k++) {
         const u = (k + 0.5) / 4;
         const nx = gapStartX + u * gapSpan;
@@ -556,27 +381,25 @@ export async function analyzeTrackBlueprint(
     gapPatternToggle++;
   }
 
-  // 4B. Place 2nd-Floor Sky Platforms (`SkyPlatform`) preceded by a Beat Jump Pad & topped with Hold Rails or Beat Notes
+  // 4B. 2nd-Floor Sky Platforms preceded by Beat Jump Pads
   let lastSkyEndX = 1100;
-  const minSkyGapPx = difficulty === 'hard' ? 1450 : difficulty === 'easy' ? 2200 : 1750;
-
-  for (const beat of beatEvents) {
-    if (beat.timeSec < 3.2 || beat.timeSec > durationSec - 4.0) continue;
+  for (const beat of dsp.beatEvents) {
+    if (beat.timeSec < 3.2 || beat.timeSec > dsp.durationSec - 4.0) continue;
     if (beat.intensity === 'calm') continue;
-    if (beat.worldX < lastSkyEndX + minSkyGapPx) continue;
+    if (beat.worldX < lastSkyEndX + tuning.minSkyGapPx) continue;
 
     const padX = beat.worldX;
     const platStartX = padX + worldPxPerSec * 0.34;
     const platDurationSec = beat.intensity === 'drop' ? 2.2 : 1.75;
     const platEndX = platStartX + worldPxPerSec * platDurationSec;
 
-    if (nearPortal(padX, 450) || nearPortal(platEndX, 450)) continue;
-    if (isGroundBusy(padX - 90, platStartX + 80)) continue;
-    const { y: padFloorY, isGap } = floorAtWorldX(padX);
+    if (road.nearPortal(padX, 450) || road.nearPortal(platEndX, 450)) continue;
+    if (ground.isBusy(padX - 90, platStartX + 80)) continue;
+    const { y: padFloorY, isGap } = road.floorAtWorldX(padX);
     if (isGap) continue;
 
     const skyY = Math.max(220, padFloorY - 142);
-    reserveGround(padX - 80, padX + 110);
+    ground.reserve(padX - 80, padX + 110);
     lastSkyEndX = platEndX;
 
     jumpPads.push({
@@ -595,21 +418,18 @@ export async function analyzeTrackBlueprint(
       band: beat.band,
     });
 
-    // Alternate between a sustained Hold Note Rail on the Sky Platform vs a rhythmic Beat Note chain + Exit Dash Ring!
     if (skyPlatforms.length % 2 === 1) {
-      const railX0 = platStartX + 45;
-      const railX1 = platEndX - 55;
       holdRails.push({
         id: nextId++,
-        x0: railX0,
-        x1: railX1,
+        x0: platStartX + 45,
+        x1: platEndX - 55,
         worldY: skyY - 26,
         band: beat.band,
         active: false,
         completed: false,
       });
     } else {
-      const skyBeats = beatEvents.filter(
+      const skyBeats: DetectedBeatEvent[] = dsp.beatEvents.filter(
         (b) => b.worldX >= platStartX + 35 && b.worldX <= platEndX - 35
       );
       if (skyBeats.length > 0) {
@@ -642,8 +462,7 @@ export async function analyzeTrackBlueprint(
         }
       }
 
-      // Exit Airborne Dash Ring off the end of 2F Sky Platform in Drop sections!
-      if (beat.intensity === 'drop' && !nearPortal(platEndX + 80, 340)) {
+      if (beat.intensity === 'drop' && !road.nearPortal(platEndX + 80, 340)) {
         const ringX = platEndX + 68;
         dashRings.push({
           id: nextId++,
@@ -657,26 +476,25 @@ export async function analyzeTrackBlueprint(
     }
   }
 
-  // 4C. Place Ground Hold Note Rails on clean flat sprint sections
+  // 4C. Ground Hold Note Rails on flat gap-free sprint stretches
   let lastGroundRailEndX = 700;
-  for (const beat of beatEvents) {
-    if (beat.timeSec < 2.2 || beat.timeSec > durationSec - 3.0) continue;
+  for (const beat of dsp.beatEvents) {
+    if (beat.timeSec < 2.2 || beat.timeSec > dsp.durationSec - 3.0) continue;
     if (beat.worldX < lastGroundRailEndX + 1900) continue;
     const railLenPx = worldPxPerSec * (beat.intensity === 'drop' ? 0.95 : 1.15);
     const rx0 = beat.worldX;
     const rx1 = rx0 + railLenPx;
 
-    if (nearPortal(rx0, 380) || nearPortal(rx1, 380)) continue;
-    if (isGroundBusy(rx0 - 90, rx1 + 90)) continue;
+    if (road.nearPortal(rx0, 380) || road.nearPortal(rx1, 380)) continue;
+    if (ground.isBusy(rx0 - 90, rx1 + 90)) continue;
 
-    // Ensure the road is flat and gap-free across [rx0, rx1]
-    const f0 = floorAtWorldX(rx0);
-    const fMid = floorAtWorldX((rx0 + rx1) * 0.5);
-    const f1 = floorAtWorldX(rx1);
+    const f0 = road.floorAtWorldX(rx0);
+    const fMid = road.floorAtWorldX((rx0 + rx1) * 0.5);
+    const f1 = road.floorAtWorldX(rx1);
     if (f0.isGap || fMid.isGap || f1.isGap) continue;
     if (Math.abs(f0.y - f1.y) > 8) continue;
 
-    reserveGround(rx0 - 60, rx1 + 60);
+    ground.reserve(rx0 - 60, rx1 + 60);
     lastGroundRailEndX = rx1;
     holdRails.push({
       id: nextId++,
@@ -689,31 +507,28 @@ export async function analyzeTrackBlueprint(
     });
   }
 
-  // 4D. Place Beat Traps & On-Beat Rhythm Target Notes across remaining BeatEvents
-  const minTrapGapPx =
-    difficulty === 'hard' ? 430 : difficulty === 'easy' ? 760 : 560;
+  // 4D. Beat Traps & On-Beat Rhythm Target Notes
   let lastTrapX = 450;
   let lastNoteX = 220;
 
-  for (let bIdx = 0; bIdx < beatEvents.length; bIdx++) {
-    const beat = beatEvents[bIdx]!;
-    if (beat.timeSec < 1.4 || beat.timeSec > durationSec - 1.8) continue;
+  for (let bIdx = 0; bIdx < dsp.beatEvents.length; bIdx++) {
+    const beat = dsp.beatEvents[bIdx]!;
+    if (beat.timeSec < 1.4 || beat.timeSec > dsp.durationSec - 1.8) continue;
     const wx = beat.worldX;
-    if (nearPortal(wx, 280)) continue;
+    if (road.nearPortal(wx, 280)) continue;
 
-    const { y: floorY, isGap } = floorAtWorldX(wx);
-    if (isGap) continue;
-    if (isGroundBusy(wx - 55, wx + 55)) continue;
+    const { y: floorY, isGap } = road.floorAtWorldX(wx);
+    if (isGap || ground.isBusy(wx - 55, wx + 55)) continue;
 
     const canSpawnTrap =
-      wx - lastTrapX >= minTrapGapPx &&
-      beat.strength >= (difficulty === 'easy' ? 0.56 : 0.42) &&
-      !floorAtWorldX(wx - 90).isGap &&
-      !floorAtWorldX(wx + 90).isGap;
+      wx - lastTrapX >= tuning.minTrapGapPx &&
+      beat.strength >= tuning.minTrapStrength &&
+      !road.floorAtWorldX(wx - 90).isGap &&
+      !road.floorAtWorldX(wx + 90).isGap;
 
-    if (canSpawnTrap && bIdx % (difficulty === 'easy' ? 3 : 2) === 0) {
+    if (canSpawnTrap && bIdx % tuning.trapModulo === 0) {
       lastTrapX = wx;
-      reserveGround(wx - 75, wx + 75);
+      ground.reserve(wx - 75, wx + 75);
       const trapHeight = Math.round(40 + beat.strength * 18);
       traps.push({
         id: nextId++,
@@ -726,7 +541,6 @@ export async function analyzeTrackBlueprint(
         screenFloorY: floorY,
       } as BeatTrap & { screenFloorY?: number });
 
-      // Place a 3-note jump arc above the Beat Trap with an on-beat apex target!
       for (const offset of [-46, 0, 46]) {
         const lift = offset === 0 ? 74 : 54;
         const nx = wx + offset;
@@ -745,9 +559,7 @@ export async function analyzeTrackBlueprint(
       continue;
     }
 
-    // Otherwise place a crisp On-Beat Rhythm Target Note (ground sprint note or low jump note)
-    const minNoteSpacing = difficulty === 'hard' ? 115 : difficulty === 'easy' ? 195 : 145;
-    if (wx - lastNoteX >= minNoteSpacing) {
+    if (wx - lastNoteX >= tuning.minNoteSpacingPx) {
       lastNoteX = wx;
       const isJumpNote = beat.band === 'treble' || (beat.intensity === 'drop' && bIdx % 3 === 1);
       orbs.push({
@@ -764,7 +576,6 @@ export async function analyzeTrackBlueprint(
     }
   }
 
-  // Sort entities by X for clean left-to-right streaming
   orbs.sort((a, b) => a.worldX - b.worldX);
   traps.sort((a, b) => a.worldX - b.worldX);
   jumpPads.sort((a, b) => a.worldX - b.worldX);
@@ -775,22 +586,22 @@ export async function analyzeTrackBlueprint(
   const blueprint: TrackBlueprint = {
     trackId: track.id,
     difficulty,
-    durationSec,
+    durationSec: dsp.durationSec,
     referenceHeight: REFERENCE_HEIGHT,
     worldPxPerSec,
     segmentWidth: segWidth,
     leadInSegments: LEAD_IN_SEGMENTS,
-    slices,
-    segments,
+    slices: dsp.slices,
+    segments: road.segments,
     orbs,
     traps,
-    divingNodes,
+    divingNodes: road.divingNodes,
     skyPlatforms,
     jumpPads,
     dashRings,
     holdRails,
-    sectionCounts,
-    totalBeats: beatEvents.length,
+    sectionCounts: dsp.sectionCounts,
+    totalBeats: dsp.beatEvents.length,
   };
 
   blueprintCache.set(cacheKey, blueprint);

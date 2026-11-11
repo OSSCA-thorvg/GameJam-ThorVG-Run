@@ -7,7 +7,7 @@ import {
   stripAudioExtension,
   type AudioFormat,
 } from './audioFormats';
-import { BUILT_IN_TRACKS, synthesizeTrackBuffer } from './proceduralTracks';
+import { BUILT_IN_TRACKS, createFallbackBuffer } from './proceduralTracks';
 
 /**
  * Web Audio API Engine for ThorVG Run.
@@ -86,7 +86,7 @@ export class AudioEngine {
         durationSec: Math.max(1, Math.round(decoded.duration)),
       };
     } else {
-      this.currentBuffer = synthesizeTrackBuffer(ctx, track);
+      this.currentBuffer = createFallbackBuffer(ctx, track.durationSec);
       this.currentTrack = track;
     }
 
@@ -142,7 +142,7 @@ export class AudioEngine {
     }
 
     if (!this.currentBuffer) {
-      this.currentBuffer = synthesizeTrackBuffer(ctx, this.currentTrack);
+      this.currentBuffer = createFallbackBuffer(ctx, this.currentTrack.durationSec);
     }
 
     this.stopSourceOnly();
