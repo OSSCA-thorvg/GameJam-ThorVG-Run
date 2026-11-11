@@ -19,43 +19,88 @@ const FORMS_ORDER: ResonanceFormType[] = ['bass', 'synth', 'treble'];
 
 export type RuntimeTrap = BeatTrap & { screenFloorY?: number };
 
+type RuntimeOrb = ResonanceOrb & { baseY: number };
+type RuntimePortal = DivingNode & { baseY: number };
+type RuntimeSkyPlatform = SkyPlatform & { baseY: number };
+type RuntimeJumpPad = JumpPad & { baseY: number };
+type RuntimeDashRing = DashRing & { baseY: number };
+type RuntimeHoldRail = HoldRail & { baseY: number };
+
 /**
- * Streams pre-computed Hybrid Rhythm-Runner terrain:
- * - Multi-elevation Ground Sprint Decks + Abyss Chasm Gaps (`isGap`)
- * - One-way 2nd-Floor Sky Platforms (`SkyPlatform`)
- * - Shrinking-ring Rhythm Beat Notes, Beat Jump Pads, Airborne Dash Rings, Hold Note Rails & Beat Traps
+ * Binary search lower-bound on sorted point entities (`item.worldX >= minX`).
+ * Achieves O(log N) lookup before O(K) visible range scan.
+ */
+function lowerBoundWorldX<T extends { worldX: number }>(
+  items: readonly T[],
+  minX: number
+): number {
+  let lo = 0;
+  let hi = items.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (items[mid]!.worldX < minX) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
+/**
+ * Binary search lower-bound on sorted span entities (`item.x0 >= minStartX`).
+ * Passing `minStartX = minX - maxSpan` guarantees every overlapping span (`x1 >= minX`) is visited in O(log N + K).
+ */
+function lowerBoundSpanX0<T extends { x0: number }>(
+  items: readonly T[],
+  minStartX: number
+): number {
+  let lo = 0;
+  let hi = items.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (items[mid]!.x0 < minStartX) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
+/**
+ * Spatial Sliding-Window Streamer for Hybrid Rhythm-Runner terrain:
+ * - Pre-sorts all course entities by X coordinate once on `loadBlueprint`
+ * - Inline-caches reference `baseY` on runtime entities (eliminating per-frame Map lookups)
+ * - Uses O(log N + K) binary-search range culling + zero-allocation reusable view buffers
  */
 export class BezierTerrain {
   private allSegments: BezierSegment[] = [];
   private baseSegments: BezierSegment[] = [];
-  private visibleSegments: BezierSegment[] = [];
+  private readonly visibleSegments: BezierSegment[] = [];
 
-  private allOrbs: ResonanceOrb[] = [];
-  private baseOrbY: Map<number, number> = new Map();
-  private visibleOrbs: ResonanceOrb[] = [];
+  private allOrbs: RuntimeOrb[] = [];
+  private readonly visibleOrbs: ResonanceOrb[] = [];
 
   private allTraps: RuntimeTrap[] = [];
-  private visibleTraps: RuntimeTrap[] = [];
+  private readonly visibleTraps: RuntimeTrap[] = [];
 
-  private allDivingNodes: DivingNode[] = [];
-  private basePortalY: Map<number, number> = new Map();
-  private visibleDivingNodes: DivingNode[] = [];
+  private allDivingNodes: RuntimePortal[] = [];
+  private readonly visibleDivingNodes: DivingNode[] = [];
 
-  private allSkyPlatforms: SkyPlatform[] = [];
-  private baseSkyY: Map<number, number> = new Map();
-  private visibleSkyPlatforms: SkyPlatform[] = [];
+  private allSkyPlatforms: RuntimeSkyPlatform[] = [];
+  private maxSkySpan: number = 0;
+  private readonly visibleSkyPlatforms: SkyPlatform[] = [];
 
-  private allJumpPads: JumpPad[] = [];
-  private basePadY: Map<number, number> = new Map();
-  private visibleJumpPads: JumpPad[] = [];
+  private allJumpPads: RuntimeJumpPad[] = [];
+  private readonly visibleJumpPads: JumpPad[] = [];
 
-  private allDashRings: DashRing[] = [];
-  private baseRingY: Map<number, number> = new Map();
-  private visibleDashRings: DashRing[] = [];
+  private allDashRings: RuntimeDashRing[] = [];
+  private readonly visibleDashRings: DashRing[] = [];
 
-  private allHoldRails: HoldRail[] = [];
-  private baseRailY: Map<number, number> = new Map();
-  private visibleHoldRails: HoldRail[] = [];
+  private allHoldRails: RuntimeHoldRail[] = [];
+  private maxRailSpan: number = 0;
+  private readonly visibleHoldRails: HoldRail[] = [];
 
   private viewportHeight: number = REFERENCE_HEIGHT;
   private refHeight: number = REFERENCE_HEIGHT;
@@ -85,72 +130,78 @@ export class BezierTerrain {
       y1: s.y1 * scaleY,
     }));
 
-    this.baseOrbY.clear();
-    this.allOrbs = blueprint.orbs.map((o) => {
-      this.baseOrbY.set(o.id, o.worldY);
-      return {
+    this.allOrbs = blueprint.orbs
+      .map((o) => ({
         ...o,
+        baseY: o.worldY,
         collected: false,
         screenY: o.worldY * scaleY,
-      };
-    });
+      }))
+      .sort((a, b) => a.worldX - b.worldX);
 
-    this.allTraps = blueprint.traps.map((t) => ({
-      ...t,
-      destroyed: false,
-      passed: false,
-      screenFloorY: ((t as RuntimeTrap).screenFloorY ?? this.refHeight * 0.7) * scaleY,
-    }));
+    this.allTraps = blueprint.traps
+      .map((t) => ({
+        ...t,
+        destroyed: false,
+        passed: false,
+        screenFloorY: ((t as RuntimeTrap).screenFloorY ?? this.refHeight * 0.7) * scaleY,
+      }))
+      .sort((a, b) => a.worldX - b.worldX);
 
-    this.basePortalY.clear();
-    this.allDivingNodes = blueprint.divingNodes.map((n) => {
-      this.basePortalY.set(n.id, n.worldY);
-      return {
+    this.allDivingNodes = blueprint.divingNodes
+      .map((n) => ({
         ...n,
+        baseY: n.worldY,
         worldY: n.worldY * scaleY,
         activated: false,
-      };
-    });
+      }))
+      .sort((a, b) => a.worldX - b.worldX);
 
-    this.baseSkyY.clear();
-    this.allSkyPlatforms = (blueprint.skyPlatforms ?? []).map((p) => {
-      this.baseSkyY.set(p.id, p.worldY);
-      return {
-        ...p,
-        screenY: p.worldY * scaleY,
-      };
-    });
+    this.maxSkySpan = 0;
+    this.allSkyPlatforms = (blueprint.skyPlatforms ?? [])
+      .map((p) => {
+        const span = Math.max(0, p.x1 - p.x0);
+        if (span > this.maxSkySpan) this.maxSkySpan = span;
+        return {
+          ...p,
+          baseY: p.worldY,
+          screenY: p.worldY * scaleY,
+        };
+      })
+      .sort((a, b) => a.x0 - b.x0);
 
-    this.basePadY.clear();
-    this.allJumpPads = (blueprint.jumpPads ?? []).map((jp) => {
-      this.basePadY.set(jp.id, jp.worldY);
-      return {
+    this.allJumpPads = (blueprint.jumpPads ?? [])
+      .map((jp) => ({
         ...jp,
+        baseY: jp.worldY,
         triggered: false,
         screenY: jp.worldY * scaleY,
-      };
-    });
+      }))
+      .sort((a, b) => a.worldX - b.worldX);
 
-    this.baseRingY.clear();
-    this.allDashRings = (blueprint.dashRings ?? []).map((dr) => {
-      this.baseRingY.set(dr.id, dr.worldY);
-      return {
+    this.allDashRings = (blueprint.dashRings ?? [])
+      .map((dr) => ({
         ...dr,
+        baseY: dr.worldY,
         triggered: false,
         screenY: dr.worldY * scaleY,
-      };
-    });
+      }))
+      .sort((a, b) => a.worldX - b.worldX);
 
-    this.baseRailY.clear();
-    this.allHoldRails = (blueprint.holdRails ?? []).map((hr) => {
-      this.baseRailY.set(hr.id, hr.worldY);
-      return {
-        ...hr,
-        active: false,
-        completed: false,
-        screenY: hr.worldY * scaleY,
-      };
-    });
+    this.maxRailSpan = 0;
+    this.allHoldRails = (blueprint.holdRails ?? [])
+      .map((hr) => {
+        const span = Math.max(0, hr.x1 - hr.x0);
+        if (span > this.maxRailSpan) this.maxRailSpan = span;
+        return {
+          ...hr,
+          baseY: hr.worldY,
+          active: false,
+          completed: false,
+          screenY: hr.worldY * scaleY,
+        };
+      })
+      .sort((a, b) => a.x0 - b.x0);
 
     this.update(-viewportWidth * 0.24, viewportWidth, viewportHeight, 0, {
       low: 0.2,
@@ -173,33 +224,40 @@ export class BezierTerrain {
         seg.cy2 = base.cy2 * scaleY;
         seg.y1 = base.y1 * scaleY;
       }
-      for (const orb of this.allOrbs) {
+      for (let i = 0; i < this.allOrbs.length; i++) {
+        const orb = this.allOrbs[i]!;
         orb.collected = false;
-        orb.screenY = (this.baseOrbY.get(orb.id) ?? orb.worldY) * scaleY;
+        orb.screenY = orb.baseY * scaleY;
       }
-      for (const trap of this.allTraps) {
+      for (let i = 0; i < this.allTraps.length; i++) {
+        const trap = this.allTraps[i]!;
         trap.destroyed = false;
         trap.passed = false;
       }
-      for (const node of this.allDivingNodes) {
+      for (let i = 0; i < this.allDivingNodes.length; i++) {
+        const node = this.allDivingNodes[i]!;
         node.activated = false;
-        node.worldY = (this.basePortalY.get(node.id) ?? node.worldY) * scaleY;
+        node.worldY = node.baseY * scaleY;
       }
-      for (const plat of this.allSkyPlatforms) {
-        plat.screenY = (this.baseSkyY.get(plat.id) ?? plat.worldY) * scaleY;
+      for (let i = 0; i < this.allSkyPlatforms.length; i++) {
+        const plat = this.allSkyPlatforms[i]!;
+        plat.screenY = plat.baseY * scaleY;
       }
-      for (const pad of this.allJumpPads) {
+      for (let i = 0; i < this.allJumpPads.length; i++) {
+        const pad = this.allJumpPads[i]!;
         pad.triggered = false;
-        pad.screenY = (this.basePadY.get(pad.id) ?? pad.worldY) * scaleY;
+        pad.screenY = pad.baseY * scaleY;
       }
-      for (const ring of this.allDashRings) {
+      for (let i = 0; i < this.allDashRings.length; i++) {
+        const ring = this.allDashRings[i]!;
         ring.triggered = false;
-        ring.screenY = (this.baseRingY.get(ring.id) ?? ring.worldY) * scaleY;
+        ring.screenY = ring.baseY * scaleY;
       }
-      for (const rail of this.allHoldRails) {
+      for (let i = 0; i < this.allHoldRails.length; i++) {
+        const rail = this.allHoldRails[i]!;
         rail.active = false;
         rail.completed = false;
-        rail.screenY = (this.baseRailY.get(rail.id) ?? rail.worldY) * scaleY;
+        rail.screenY = rail.baseY * scaleY;
       }
       this.update(-viewportWidth * 0.24, viewportWidth, viewportHeight, 0, {
         low: 0.2,
@@ -234,7 +292,12 @@ export class BezierTerrain {
       this.baseSegments.push({ ...seg });
       this.allSegments.push(seg);
     }
-    this.visibleSegments = this.allSegments.slice(0, 18);
+
+    this.visibleSegments.length = 0;
+    const initialCount = Math.min(18, this.allSegments.length);
+    for (let i = 0; i < initialCount; i++) {
+      this.visibleSegments.push(this.allSegments[i]!);
+    }
   }
 
   public update(
@@ -249,21 +312,20 @@ export class BezierTerrain {
     const minX = cameraX - this.segWidth * 2;
     const maxX = cameraX + viewportWidth + this.segWidth * 4;
 
-    // 1. Slice visible segments using lead-in-aware index offset (supports negative worldX!)
+    // 1. Direct index-calculated visible segments (O(K), zero array allocation)
     const startIdx = Math.max(0, Math.floor(minX / this.segWidth) + this.leadInSegments - 1);
     const endIdx = Math.min(
       this.allSegments.length - 1,
       Math.ceil(maxX / this.segWidth) + this.leadInSegments + 2
     );
 
-    this.visibleSegments = [];
+    this.visibleSegments.length = 0;
+    const pulse = freq.isBeat ? 2.5 * scaleY : 0;
     for (let i = startIdx; i <= endIdx; i++) {
       const seg = this.allSegments[i];
       const base = this.baseSegments[i];
       if (!seg || !base) continue;
 
-      // Keep running decks crisp and solid (only micro-pulse control handles slightly on strong bass)
-      const pulse = freq.isBeat ? 2.5 * scaleY : 0;
       seg.y0 = base.y0 * scaleY;
       seg.y1 = base.y1 * scaleY;
       seg.cy1 = base.cy1 * scaleY - pulse;
@@ -273,73 +335,85 @@ export class BezierTerrain {
 
     const fallbackY = viewportHeight * 0.7;
 
-    // 2. Visible Rhythm Beat Notes
-    this.visibleOrbs = [];
-    for (let i = 0; i < this.allOrbs.length; i++) {
+    // 2. Visible Rhythm Beat Notes — O(log N + K)
+    this.visibleOrbs.length = 0;
+    for (let i = lowerBoundWorldX(this.allOrbs, minX); i < this.allOrbs.length; i++) {
       const orb = this.allOrbs[i]!;
-      if (orb.collected || orb.worldX < minX || orb.worldX > maxX) continue;
-      const baseY = this.baseOrbY.get(orb.id) ?? orb.worldY;
-      orb.screenY = baseY * scaleY + Math.sin(timeSec * 6 + orb.id * 0.5) * 2.5;
+      if (orb.worldX > maxX) break;
+      if (orb.collected) continue;
+      orb.screenY = orb.baseY * scaleY + Math.sin(timeSec * 6 + orb.id * 0.5) * 2.5;
       this.visibleOrbs.push(orb);
     }
 
-    // 3. Visible Beat Traps anchored to ground road
-    this.visibleTraps = [];
-    for (let i = 0; i < this.allTraps.length; i++) {
+    // 3. Visible Beat Traps anchored to ground road — O(log N + K)
+    this.visibleTraps.length = 0;
+    for (let i = lowerBoundWorldX(this.allTraps, minX); i < this.allTraps.length; i++) {
       const trap = this.allTraps[i]!;
-      if (trap.destroyed || trap.worldX < minX || trap.worldX > maxX) continue;
+      if (trap.worldX > maxX) break;
+      if (trap.destroyed) continue;
       const { floorY } = evaluateBezierFloor(this.visibleSegments, trap.worldX, fallbackY);
       trap.screenFloorY = floorY;
       this.visibleTraps.push(trap);
     }
 
-    // 4. Visible Frequency Diving Portals
-    this.visibleDivingNodes = [];
-    for (let i = 0; i < this.allDivingNodes.length; i++) {
+    // 4. Visible Frequency Diving Portals — O(log N + K)
+    this.visibleDivingNodes.length = 0;
+    for (
+      let i = lowerBoundWorldX(this.allDivingNodes, minX);
+      i < this.allDivingNodes.length;
+      i++
+    ) {
       const node = this.allDivingNodes[i]!;
-      if (node.activated || node.worldX < minX || node.worldX > maxX) continue;
-      const baseY = this.basePortalY.get(node.id) ?? node.worldY;
-      node.worldY = baseY * scaleY;
+      if (node.worldX > maxX) break;
+      if (node.activated) continue;
+      node.worldY = node.baseY * scaleY;
       this.visibleDivingNodes.push(node);
     }
 
-    // 5. Visible 2F Sky Platforms
-    this.visibleSkyPlatforms = [];
-    for (let i = 0; i < this.allSkyPlatforms.length; i++) {
+    // 5. Visible 2F Sky Platforms — O(log N + K)
+    this.visibleSkyPlatforms.length = 0;
+    for (
+      let i = lowerBoundSpanX0(this.allSkyPlatforms, minX - this.maxSkySpan);
+      i < this.allSkyPlatforms.length;
+      i++
+    ) {
       const plat = this.allSkyPlatforms[i]!;
-      if (plat.x1 < minX || plat.x0 > maxX) continue;
-      const baseY = this.baseSkyY.get(plat.id) ?? plat.worldY;
-      plat.screenY = baseY * scaleY;
+      if (plat.x0 > maxX) break;
+      if (plat.x1 < minX) continue;
+      plat.screenY = plat.baseY * scaleY;
       this.visibleSkyPlatforms.push(plat);
     }
 
-    // 6. Visible Beat Jump Pads
-    this.visibleJumpPads = [];
-    for (let i = 0; i < this.allJumpPads.length; i++) {
+    // 6. Visible Beat Jump Pads — O(log N + K)
+    this.visibleJumpPads.length = 0;
+    for (let i = lowerBoundWorldX(this.allJumpPads, minX); i < this.allJumpPads.length; i++) {
       const pad = this.allJumpPads[i]!;
-      if (pad.worldX < minX || pad.worldX > maxX) continue;
-      const baseY = this.basePadY.get(pad.id) ?? pad.worldY;
-      pad.screenY = baseY * scaleY;
+      if (pad.worldX > maxX) break;
+      pad.screenY = pad.baseY * scaleY;
       this.visibleJumpPads.push(pad);
     }
 
-    // 7. Visible Airborne Dash Rings
-    this.visibleDashRings = [];
-    for (let i = 0; i < this.allDashRings.length; i++) {
+    // 7. Visible Airborne Dash Rings — O(log N + K)
+    this.visibleDashRings.length = 0;
+    for (let i = lowerBoundWorldX(this.allDashRings, minX); i < this.allDashRings.length; i++) {
       const ring = this.allDashRings[i]!;
-      if (ring.triggered || ring.worldX < minX || ring.worldX > maxX) continue;
-      const baseY = this.baseRingY.get(ring.id) ?? ring.worldY;
-      ring.screenY = baseY * scaleY;
+      if (ring.worldX > maxX) break;
+      if (ring.triggered) continue;
+      ring.screenY = ring.baseY * scaleY;
       this.visibleDashRings.push(ring);
     }
 
-    // 8. Visible Hold Note Rails
-    this.visibleHoldRails = [];
-    for (let i = 0; i < this.allHoldRails.length; i++) {
+    // 8. Visible Hold Note Rails — O(log N + K)
+    this.visibleHoldRails.length = 0;
+    for (
+      let i = lowerBoundSpanX0(this.allHoldRails, minX - this.maxRailSpan);
+      i < this.allHoldRails.length;
+      i++
+    ) {
       const rail = this.allHoldRails[i]!;
-      if (rail.x1 < minX || rail.x0 > maxX) continue;
-      const baseY = this.baseRailY.get(rail.id) ?? rail.worldY;
-      rail.screenY = baseY * scaleY;
+      if (rail.x0 > maxX) break;
+      if (rail.x1 < minX) continue;
+      rail.screenY = rail.baseY * scaleY;
       this.visibleHoldRails.push(rail);
     }
   }
