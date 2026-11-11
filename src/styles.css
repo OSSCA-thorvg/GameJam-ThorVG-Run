@@ -31,6 +31,14 @@ body,
   backface-visibility: hidden;
 }
 
+.tvg-canvas.paused-inspectable {
+  cursor: grab;
+}
+
+.tvg-canvas.paused-inspectable:active {
+  cursor: grabbing;
+}
+
 @keyframes gameLaunchVeilFade {
   0% {
     opacity: 1;
@@ -407,7 +415,7 @@ body,
 .hud-top-left,
 .hud-top-right,
 .hud-bottom-center,
-.hud-Overlay button {
+.hud-overlay button {
   pointer-events: auto;
 }
 
@@ -481,7 +489,7 @@ body,
   padding: 12px 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .score-row {
@@ -1347,3 +1355,362 @@ body,
   background: rgba(52, 211, 153, 0.16);
   border: 1px solid rgba(52, 211, 153, 0.5);
 }
+
+/* ==================== Live HUD Zoom Bar & Pause Trigger ==================== */
+.hud-zoom-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(5, 8, 18, 0.72);
+  border: 1px solid rgba(5, 213, 255, 0.28);
+  border-radius: 8px;
+  padding: 4px 6px;
+}
+
+.hud-zoom-step-btn {
+  flex: 0 0 28px;
+  padding: 4px 0;
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 900;
+}
+
+.hud-zoom-value {
+  flex: 1;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 800;
+  color: #05d5ff;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.hud-zoom-reset-btn {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: #ffe600;
+  border-color: rgba(255, 230, 0, 0.42);
+  background: rgba(255, 230, 0, 0.14);
+}
+
+.hud-zoom-reset-btn.is-default {
+  opacity: 0.6;
+  color: #9cb3d9;
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.pause-trigger-btn {
+  width: 100%;
+  flex: none;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  color: #ffe600;
+  border-color: rgba(255, 230, 0, 0.45);
+  background: rgba(255, 230, 0, 0.13);
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+
+.pause-trigger-btn:hover {
+  background: rgba(255, 230, 0, 0.24);
+  border-color: #ffe600;
+}
+
+/* ==================== Pause Overlay & ThorVG Vector Inspector ==================== */
+.pause-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 14px 16px;
+  background: radial-gradient(circle at 50% 58%, rgba(7, 9, 20, 0) 52%, rgba(7, 9, 20, 0.45) 100%);
+}
+
+.pause-panel {
+  pointer-events: auto;
+  width: 100%;
+  max-width: 660px;
+  background: rgba(10, 14, 28, 0.95);
+  border: 1.5px solid rgba(5, 213, 255, 0.55);
+  border-radius: 16px;
+  padding: 12px 16px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.7), 0 0 28px rgba(5, 213, 255, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pause-collapsed-pill {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(10, 14, 28, 0.95);
+  border: 1.5px solid rgba(5, 213, 255, 0.55);
+  border-radius: 999px;
+  padding: 7px 14px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.65);
+}
+
+.pause-pill-zoom {
+  font-size: 12.5px;
+  font-weight: 900;
+  color: #ffe600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pause-pill-btn {
+  flex: 0 0 auto;
+  padding: 5px 11px;
+  font-size: 11.5px;
+  border-color: rgba(5, 213, 255, 0.4);
+  color: #bceeff;
+  white-space: nowrap;
+}
+
+.pause-pill-resume-btn {
+  padding: 5px 13px;
+  font-size: 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.pause-top-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.pause-meta-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.pause-badge {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: #05d5ff;
+  background: rgba(5, 213, 255, 0.14);
+  border: 1px solid rgba(5, 213, 255, 0.4);
+  padding: 3px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.pause-meta-summary {
+  font-size: 12px;
+  font-weight: 700;
+  color: #cbd9f0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pause-collapse-btn {
+  flex: 0 0 auto;
+  padding: 5px 10px;
+  font-size: 11px;
+  border-color: rgba(5, 213, 255, 0.36);
+  color: #bceeff;
+  white-space: nowrap;
+}
+
+.pause-actions-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.pause-action-btn {
+  padding: 9px 14px;
+  font-size: 13.5px;
+  font-weight: 900;
+  border-radius: 10px;
+  transition: transform 0.12s ease, background 0.14s ease, border-color 0.14s ease;
+}
+
+.pause-action-btn:hover {
+  transform: translateY(-1px);
+}
+
+.ghost-btn.pause-action-btn {
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  color: #f2f7ff;
+}
+
+.ghost-btn.pause-action-btn:hover {
+  background: rgba(255, 42, 109, 0.18);
+  border-color: rgba(255, 42, 109, 0.55);
+  color: #ffffff;
+}
+
+.pause-vector-section {
+  background: rgba(5, 8, 18, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 11px;
+  padding: 7px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.pause-vector-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pause-vector-title {
+  font-size: 11.5px;
+  font-weight: 800;
+  color: #05d5ff;
+  letter-spacing: 0.02em;
+}
+
+.pause-vector-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pause-renderer-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 7px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: filter 0.14s ease, transform 0.12s ease;
+}
+
+.pause-renderer-btn:hover {
+  filter: brightness(1.12);
+}
+
+.pause-renderer-btn.cpu {
+  background: rgba(5, 213, 255, 0.16);
+  border: 1px solid rgba(5, 213, 255, 0.55);
+  color: #05d5ff;
+}
+
+.pause-renderer-btn.gpu {
+  background: rgba(255, 42, 109, 0.18);
+  border: 1px solid rgba(255, 42, 109, 0.6);
+  color: #ff7aa8;
+}
+
+.pause-renderer-switch-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #e6f0ff;
+  opacity: 0.92;
+}
+
+.pause-zoom-readout {
+  font-size: 12.5px;
+  font-weight: 900;
+  color: #ffe600;
+  background: rgba(255, 230, 0, 0.14);
+  border: 1px solid rgba(255, 230, 0, 0.45);
+  padding: 2px 9px;
+  border-radius: 7px;
+  font-variant-numeric: tabular-nums;
+  min-width: 54px;
+  text-align: center;
+}
+
+.pause-zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.pause-step-btn {
+  flex: 0 0 30px;
+  padding: 4px 0;
+  font-size: 15px;
+  line-height: 1;
+  font-weight: 900;
+}
+
+.pause-zoom-slider {
+  flex: 1;
+  height: 6px;
+  accent-color: #05d5ff;
+  cursor: pointer;
+}
+
+.pause-reset-btn {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: #ffe600;
+  border-color: rgba(255, 230, 0, 0.42);
+  background: rgba(255, 230, 0, 0.13);
+  white-space: nowrap;
+}
+
+.pause-reset-btn.is-default {
+  opacity: 0.62;
+  color: #9cb3d9;
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.pause-preset-row {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+
+.pause-preset-pill {
+  padding: 4px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  color: #c5daf6;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  cursor: pointer;
+  transition: all 0.12s ease;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.pause-preset-pill:hover {
+  background: rgba(5, 213, 255, 0.16);
+  border-color: rgba(5, 213, 255, 0.5);
+  color: #ffffff;
+}
+
+.pause-preset-pill.active {
+  color: #070914;
+  background: linear-gradient(90deg, #05d5ff, #ffe600);
+  border-color: #ffe600;
+  box-shadow: 0 0 12px rgba(5, 213, 255, 0.45);
+}
+
+.pause-vector-hint {
+  font-size: 10.5px;
+  color: #9cb3d9;
+  text-align: center;
+  line-height: 1.28;
+}
+

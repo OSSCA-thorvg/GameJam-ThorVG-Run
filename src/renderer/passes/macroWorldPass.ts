@@ -34,6 +34,8 @@ export function renderMacroWorldPass(
   const isDrop = state.sectionIntensity === 'drop';
   const isOverdrive = Boolean(state.overdriveActive);
   const combo = state.combo ?? 1;
+  const tw = (w: number) => Math.max(0.75, Math.min(w * 14, ts(w)));
+  const cullPad = Math.max(80, ts(95));
 
   resetWorldShapeLayers(shapes);
 
@@ -82,7 +84,8 @@ export function renderMacroWorldPass(
 
   // 1. Render Solid Sprint Decks with Clean Chasm Breaks (`isGap`)
   if (segments.length > 0) {
-    const bottomY = ty(height + 160);
+    const bottomY = Math.max(height + 40, ty(height + 160));
+    const cullSegPad = Math.max(40, ts(40));
     const solidRuns: BezierSegment[][] = [];
     let currentRun: BezierSegment[] = [];
 
@@ -94,7 +97,7 @@ export function renderMacroWorldPass(
         }
         const gx0 = tx(seg.x0 - cameraX);
         const gx1 = tx(seg.x1 - cameraX);
-        if (gx1 >= -20 && gx0 <= width + 20) {
+        if (gx1 >= -cullSegPad && gx0 <= width + cullSegPad) {
           const gy = ty(Math.max(seg.y0, seg.y1) + 46);
           shapes.traps.moveTo(gx0, gy).lineTo(gx1, gy);
           hasTraps = true;
@@ -134,21 +137,25 @@ export function renderMacroWorldPass(
         shapes.waveCore.cubicTo(cx1, cy1, cx2, cy2, x1, y1);
 
         const x0 = tx(seg.x0 - cameraX);
-        if (x1 >= -30 && x0 <= width + 30) {
-          const segSpan = Math.max(12, x1 - x0);
-          const barW = Math.max(3, segSpan * 0.22);
+        if (x1 >= -cullSegPad && x0 <= width + cullSegPad) {
           const eLow = (seg.low ?? 0.25) * (0.65 + frequency.low * 0.65);
           const eMid = (seg.mid ?? 0.25) * (0.65 + frequency.mid * 0.65);
           const eHigh = (seg.high ?? 0.25) * (0.65 + frequency.high * 0.65);
           const energies = [eLow, eMid, eHigh];
           const midRoadY = (ty(seg.y0) + y1) * 0.5;
-          const availDepth = Math.max(24, height - midRoadY - 12);
+          const specBottomY = Math.min(height, bottomY);
+          const availDepth = specBottomY - midRoadY - Math.max(4, ts(10));
 
-          for (let bIdx = 0; bIdx < 3; bIdx++) {
-            const bx = x0 + (bIdx + 0.22) * (segSpan / 3);
-            const bh = Math.max(10, Math.min(availDepth * 0.85, availDepth * energies[bIdx]!));
-            shapes.spectrum.appendRect(bx, height - bh, barW, bh, { rx: 2, ry: 2 });
-            hasSpectrum = true;
+          if (availDepth > 12 && midRoadY < height - 18) {
+            const segSpan = Math.max(ts(12), x1 - x0);
+            const barW = Math.max(1.5, segSpan * 0.22);
+            for (let bIdx = 0; bIdx < 3; bIdx++) {
+              const bx = x0 + (bIdx + 0.22) * (segSpan / 3);
+              const bh = Math.max(4, Math.min(availDepth * 0.85, availDepth * energies[bIdx]!));
+              const rx = Math.max(1, ts(2));
+              shapes.spectrum.appendRect(bx, specBottomY - bh, barW, bh, { rx, ry: rx });
+              hasSpectrum = true;
+            }
           }
         }
       }
@@ -171,17 +178,17 @@ export function renderMacroWorldPass(
 
     if (solidRuns.length > 0) {
       const fillAlpha = isOverdrive ? 70 : isDrop ? 56 : 40;
-      const glowWidth = ts(isOverdrive ? 14 : isDrop || frequency.isBeat ? 11 : 8);
+      const glowWidth = Math.max(2.0, ts(isOverdrive ? 14 : isDrop || frequency.isBeat ? 11 : 8));
       const glowAlpha = isOverdrive ? 165 : isDrop || frequency.isBeat ? 132 : 94;
 
       shapes.waveFill.fill(fr, fg, fb, fillAlpha);
       if (hasSpectrum) {
         shapes.spectrum
           .fill(fr, fg, fb, isDrop || isOverdrive ? 88 : 52)
-          .stroke({ width: ts(1.2), color: [sr, sg, sb, 115] });
+          .stroke({ width: tw(1.2), color: [sr, sg, sb, 115] });
       }
       shapes.waveGlow.stroke({ width: glowWidth, color: [fr, fg, fb, glowAlpha] });
-      shapes.waveCore.stroke({ width: ts(3.4), color: [255, 255, 255, 245] });
+      shapes.waveCore.stroke({ width: tw(3.4), color: [255, 255, 255, 245] });
     }
   }
 
@@ -202,7 +209,7 @@ export function renderMacroWorldPass(
   for (const plat of state.skyPlatforms ?? []) {
     const sx0 = tx(plat.x0 - cameraX);
     const sx1 = tx(plat.x1 - cameraX);
-    if (sx1 < -40 || sx0 > width + 40) continue;
+    if (sx1 < -cullPad || sx0 > width + cullPad) continue;
     const sy = ty(plat.screenY ?? plat.worldY);
     const pw = Math.max(ts(24), sx1 - sx0);
     const ph = ts(11);
@@ -222,7 +229,7 @@ export function renderMacroWorldPass(
     if (rail.completed) continue;
     const rx0 = tx(rail.x0 - cameraX);
     const rx1 = tx(rail.x1 - cameraX);
-    if (rx1 < -40 || rx0 > width + 40) continue;
+    if (rx1 < -cullPad || rx0 > width + cullPad) continue;
     const ry = ty(rail.screenY ?? rail.worldY);
     const beamH = ts(rail.active ? 12 : 8.5);
     const target = getBandShape(rail.band);
@@ -238,7 +245,7 @@ export function renderMacroWorldPass(
 
   for (const pad of state.jumpPads ?? []) {
     const px = tx(pad.worldX - cameraX);
-    if (px < -50 || px > width + 50) continue;
+    if (px < -cullPad || px > width + cullPad) continue;
     const py = ty(pad.screenY ?? pad.worldY);
 
     if (pad.kind === 'slam') {
@@ -277,7 +284,7 @@ export function renderMacroWorldPass(
   for (const ring of state.dashRings ?? []) {
     if (ring.triggered) continue;
     const rx = tx(ring.worldX - cameraX);
-    if (rx < -60 || rx > width + 60) continue;
+    if (rx < -cullPad || rx > width + cullPad) continue;
     const ry = ty(ring.screenY ?? ring.worldY);
     const rad = ts(ring.radius);
     shapes.gimmicks
@@ -302,7 +309,7 @@ export function renderMacroWorldPass(
     shapes.gimmicks
       .fillRule(shapes.evenOddRule)
       .fill(255, 212, 50, 150)
-      .stroke({ width: ts(2.8), color: [255, 250, 185, 252] });
+      .stroke({ width: tw(2.8), color: [255, 250, 185, 252] });
   }
 
   // 4. Rhythm Beat Notes (`bandBass` / `bandSynth` / `bandTreble`) & `★ Prism Stars` (`prismStars`)
@@ -312,7 +319,7 @@ export function renderMacroWorldPass(
   for (const orb of orbs) {
     if (orb.collected) continue;
     const ox = tx(orb.worldX - cameraX);
-    if (ox < -55 || ox > width + 55) continue;
+    if (ox < -cullPad || ox > width + cullPad) continue;
     const oy = ty(orb.screenY ?? orb.worldY);
     const isMatched = isOverdrive || activeForm === orb.band;
     const pulse = 1 + Math.sin(state.timeSec * 8 + orb.id * 0.7) * (isMatched ? 0.19 : 0.12);
@@ -359,7 +366,7 @@ export function renderMacroWorldPass(
     shape
       .fill(br, bgc, bb, matched ? 242 : 182)
       .stroke({
-        width: ts(matched ? 2.6 : 1.7),
+        width: tw(matched ? 2.6 : 1.7),
         color: matched ? [255, 255, 255, 255] : [235, 242, 255, 195],
       });
   }
@@ -367,17 +374,17 @@ export function renderMacroWorldPass(
   if (hasPrismStars) {
     shapes.prismStars
       .fill(255, 232, 70, 248)
-      .stroke({ width: ts(2.8), color: [255, 255, 255, 255] });
+      .stroke({ width: tw(2.8), color: [255, 255, 255, 255] });
   }
   if (hasTimingRings) {
-    shapes.timingRings.stroke({ width: ts(2.1), color: [255, 238, 120, 215] });
+    shapes.timingRings.stroke({ width: tw(2.1), color: [255, 238, 120, 215] });
   }
 
   // 5. Ground Beat Traps (Crimson Spikes) & Aerial BeatDrones (Spinning 4-Blade Spiked Rotors)
   for (const trap of traps) {
     if (trap.destroyed) continue;
     const sx = tx(trap.worldX - cameraX);
-    if (sx < -65 || sx > width + 65) continue;
+    if (sx < -cullPad || sx > width + cullPad) continue;
 
     if (trap.isAerialDrone) {
       const cy = ty(
@@ -405,7 +412,7 @@ export function renderMacroWorldPass(
     hasTraps = true;
   }
   if (hasTraps) {
-    shapes.traps.fill(255, 45, 95, 236).stroke({ width: 2.1, color: [255, 215, 225, 255] });
+    shapes.traps.fill(255, 45, 95, 236).stroke({ width: tw(2.1), color: [255, 215, 225, 255] });
   }
 
   // 6. Frequency Diving Nodes (Portals) — colored by nearest upcoming portal
@@ -414,7 +421,7 @@ export function renderMacroWorldPass(
   for (const node of divingNodes) {
     if (node.activated) continue;
     const sx = tx(node.worldX - cameraX);
-    if (sx < -80 || sx > width + 80) continue;
+    if (sx < -cullPad || sx > width + cullPad) continue;
     const sy = ty(node.worldY);
     const rad = ts(node.radius);
     if (!nearestPortalColor) {
@@ -431,7 +438,7 @@ export function renderMacroWorldPass(
       .fillRule(shapes.evenOddRule)
       .fill(nearestPortalColor[0], nearestPortalColor[1], nearestPortalColor[2], 75)
       .stroke({
-        width: 3.5,
+        width: tw(3.5),
         color: [nearestPortalColor[0], nearestPortalColor[1], nearestPortalColor[2], 255],
       });
   }

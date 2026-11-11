@@ -30,6 +30,10 @@ export const PLAYER_HIT_X_RATIO = 0.24;
 const OVERDRIVE_DURATION_SEC = 8.0;
 const ZOOM_THRESHOLD = 50.0;
 const HUD_PUBLISH_INTERVAL_SEC = 0.05; // 20Hz steady telemetry + 0ms instant flush on discrete dirty events
+const LIVE_MIN_ZOOM = 0.4;
+const LIVE_MAX_ZOOM = 4.0;
+const PAUSED_MIN_ZOOM = 0.2;
+const PAUSED_MAX_ZOOM = 20.0;
 
 /**
  * Core 60fps Hybrid Rhythm-Runner Coordinator:
@@ -124,6 +128,25 @@ export class GameEngine {
   private statusBanner: BannerMessage | null = null;
   private statusBannerTimer: number = 0;
 
+  // Pause & Interactive Vector Camera State
+  private paused: boolean = false;
+  private pauseSeq: number = 0;
+  private pausedAudioSec: number = 0;
+  private pausedFreq: FrequencyBands = {
+    low: 0.1,
+    mid: 0.1,
+    high: 0.1,
+    overall: 0.1,
+    isBeat: false,
+  };
+  private lastSpeedMultiplier: number = 1.0;
+  private userZoom: number = 1.0;
+  private savedLiveZoom: number = 1.0;
+  private panX: number = 0;
+  private panY: number = 0;
+  private hasManualPan: boolean = false;
+  private pausedRenderRaf: number = 0;
+
   constructor(audio: AudioEngine, onHudUpdate: (hud: HUDTelemetry) => void) {
     this.audio = audio;
     this.terrain = new BezierTerrain();
@@ -144,6 +167,10 @@ export class GameEngine {
     this.width = width;
     this.height = height;
     this.hudDirty = true;
+    if (this.running && this.paused) {
+      this.clampPausedPan();
+      this.refreshPausedView(true);
+    }
   }
 
   public setDifficulty(difficulty: DifficultyMode): void {
@@ -158,6 +185,9 @@ export class GameEngine {
   public setSfxMode(mode: SfxMode): void {
     this.audio.setSfxMode(mode);
     this.hudDirty = true;
+    if (this.running && this.paused) {
+      this.publishHud(this.audio.getProgress(), this.lastSpeedMultiplier, false);
+    }
   }
 
   public getSfxMode(): SfxMode {
@@ -168,12 +198,16 @@ export class GameEngine {
     const next = nextSfxMode(this.audio.getSfxMode());
     this.audio.setSfxMode(next);
     this.hudDirty = true;
+    if (this.running && this.paused) {
+      this.publishHud(this.audio.getProgress(), this.lastSpeedMultiplier, false);
+    }
     return next;
   }
 
   public activateOverdrive(): boolean {
     if (
       !this.running ||
+      this.paused ||
       this.phase !== 'MACRO' ||
       this.overdriveTimer > 0 ||
       this.resonanceGauge < 100
@@ -212,6 +246,10 @@ export class GameEngine {
     this.width = width;
     this.height = height;
     this.renderer?.resize(width, height);
+    if (this.running && this.paused) {
+      this.clampPausedPan();
+      this.refreshPausedView(true);
+    }
   }
 
   public async prepareRun(
@@ -266,14 +304,25 @@ export class GameEngine {
     await this.audio.startPlayback();
     if (!this.running) {
       this.audio.stop();
+    } else if (this.paused) {
+      this.audio.pause();
     }
   }
 
   public stopRun(): void {
     this.running = false;
+    this.paused = false;
+    this.pauseSeq++;
+    this.userZoom = 1.0;
+    this.savedLiveZoom = 1.0;
+    this.panX = 0;
+    this.panY = 0;
+    this.hasManualPan = false;
     this.isDiveHeld = false;
     this.isJumpHeld = false;
     cancelAnimationFrame(this.rafId);
+    cancelAnimationFrame(this.pausedRenderRaf);
+    this.pausedRenderRaf = 0;
     this.audio.stop();
   }
 
@@ -281,7 +330,302 @@ export class GameEngine {
     return this.width * this.hitXRatio;
   }
 
+  private getPhaseBaseZoom(): number {
+    const punchScale =
+      this.overdriveTimer > 0
+        ? 0.052
+        : this.currentSectionIntensity === 'drop'
+          ? 0.044
+          : 0.028;
+    return this.phase === 'MACRO' ? 1.0 + this.beatPulse * punchScale : this.zoomScale;
+  }
+
+  private getEffectiveZoomScale(): number {
+    return this.getPhaseBaseZoom() * this.userZoom;
+  }
+
+  private getLiveFocalPoint(): { fx: number; fy: number } {
+    const playerScreenX = this.getPlayerScreenX();
+    if (this.phase === 'MACRO' || this.phase === 'MICRO') {
+      return { fx: playerScreenX, fy: this.playerY };
+    }
+    return { fx: this.focalScreenX, fy: this.focalScreenY };
+  }
+
+  private getEffectiveFocalPoint(): { fx: number; fy: number } {
+    if (this.paused) {
+      return { fx: this.width * 0.5, fy: this.height * 0.5 };
+    }
+    return this.getLiveFocalPoint();
+  }
+
+  private getClampedNeutralPausedPan(): { panX: number; panY: number } {
+    const { fx: fx0, fy: fy0 } = this.getLiveFocalPoint();
+    const cx = this.width * 0.5;
+    const cy = this.height * 0.5;
+    const zEff = Math.max(0.05, this.getEffectiveZoomScale());
+    const rawPanX = (fx0 - cx) * (1 - 1 / zEff);
+    const rawPanY = (fy0 - cy) * (1 - 1 / zEff);
+
+    const totalWorldX = Math.max(
+      this.terrain.getMaxWorldX(),
+      this.audio.getDurationSec() * this.baseSpeed
+    );
+    const minPanX = -this.width - this.cameraX - cx;
+    const maxPanX = totalWorldX + this.width - this.cameraX - cx;
+    return {
+      panX: Math.max(minPanX, Math.min(maxPanX, rawPanX)),
+      panY: Math.max(-this.height * 1.2, Math.min(this.height * 1.2, rawPanY)),
+    };
+  }
+
+  private clampPausedPan(): void {
+    const cx = this.width * 0.5;
+    const totalWorldX = Math.max(
+      this.terrain.getMaxWorldX(),
+      this.audio.getDurationSec() * this.baseSpeed
+    );
+    const minPanX = -this.width - this.cameraX - cx;
+    const maxPanX = totalWorldX + this.width - this.cameraX - cx;
+    this.panX = Math.max(minPanX, Math.min(maxPanX, this.panX));
+    this.panY = Math.max(-this.height * 1.2, Math.min(this.height * 1.2, this.panY));
+  }
+
+  private computeViewWorldBounds(includePhysicsUnion: boolean): { minX: number; maxX: number } {
+    const zEff = Math.max(0.05, this.getEffectiveZoomScale());
+    const { fx } = this.getEffectiveFocalPoint();
+    const uLeft = this.panX + fx - fx / zEff;
+    const uRight = this.panX + fx + (this.width - fx) / zEff;
+    const pad = Math.max(this.baseSpeed * 0.16, 220);
+
+    let minX = this.cameraX + Math.min(uLeft, uRight) - pad;
+    let maxX = this.cameraX + Math.max(uLeft, uRight) + pad;
+
+    if (includePhysicsUnion) {
+      minX = Math.min(minX, this.cameraX - 160);
+      maxX = Math.max(maxX, this.cameraX + this.width + 320);
+    }
+
+    return { minX, maxX };
+  }
+
+  public get isPaused(): boolean {
+    return this.paused;
+  }
+
+  public pauseRun(): void {
+    if (!this.running || this.paused || this.finishRecorded) return;
+    this.pauseSeq++;
+
+    this.pausedFreq = this.audio.getFrequencyData();
+    this.pausedAudioSec = this.audio.getElapsedSec();
+    this.savedLiveZoom = this.userZoom;
+    this.hasManualPan = false;
+
+    const { fx: fx0, fy: fy0 } = this.getLiveFocalPoint();
+    const cx = this.width * 0.5;
+    const cy = this.height * 0.5;
+    const zEff = Math.max(0.05, this.getEffectiveZoomScale());
+    this.panX = (fx0 - cx) * (1 - 1 / zEff);
+    this.panY = (fy0 - cy) * (1 - 1 / zEff);
+
+    this.shakeTimer = 0;
+    this.isJumpHeld = false;
+    this.isDiveHeld = false;
+    this.paused = true;
+
+    cancelAnimationFrame(this.rafId);
+    this.audio.pause();
+    this.clampPausedPan();
+    this.refreshPausedView(true);
+  }
+
+  public async resumeRun(): Promise<void> {
+    if (!this.running || !this.paused || this.finishRecorded) return;
+    const seq = ++this.pauseSeq;
+
+    await this.audio.resume();
+    if (this.pauseSeq !== seq || !this.running || !this.paused || this.finishRecorded) {
+      return;
+    }
+
+    this.paused = false;
+    this.panX = 0;
+    this.panY = 0;
+    this.hasManualPan = false;
+    if (this.userZoom < LIVE_MIN_ZOOM || this.userZoom > LIVE_MAX_ZOOM) {
+      this.userZoom = Math.max(
+        LIVE_MIN_ZOOM,
+        Math.min(LIVE_MAX_ZOOM, this.savedLiveZoom)
+      );
+    }
+
+    cancelAnimationFrame(this.pausedRenderRaf);
+    this.pausedRenderRaf = 0;
+    this.lastFrameTime = performance.now();
+
+    const audioSec = this.audio.getElapsedSec();
+    const freq = this.audio.getFrequencyData();
+    this.terrain.update(
+      this.cameraX,
+      this.width,
+      this.height,
+      this.elapsedSec,
+      freq,
+      this.computeViewWorldBounds(true)
+    );
+    this.renderCurrentState(audioSec, freq);
+    this.hudDirty = false;
+    this.publishHud(this.audio.getProgress(), this.lastSpeedMultiplier, false);
+
+    cancelAnimationFrame(this.rafId);
+    this.rafId = requestAnimationFrame(this.loop);
+  }
+
+  public togglePause(): void {
+    if (!this.running || this.finishRecorded) return;
+    if (this.paused) {
+      void this.resumeRun();
+    } else {
+      this.pauseRun();
+    }
+  }
+
+  public getUserZoom(): number {
+    return this.userZoom;
+  }
+
+  public setUserZoom(
+    nextZoom: number,
+    anchorScreenX?: number,
+    anchorScreenY?: number
+  ): void {
+    if (!this.running || this.finishRecorded) return;
+    const minZ = this.paused ? PAUSED_MIN_ZOOM : LIVE_MIN_ZOOM;
+    const maxZ = this.paused ? PAUSED_MAX_ZOOM : LIVE_MAX_ZOOM;
+    const clamped = Math.max(minZ, Math.min(maxZ, nextZoom));
+    if (Math.abs(clamped - this.userZoom) < 1e-4) return;
+
+    if (this.paused) {
+      const cx = this.width * 0.5;
+      const cy = this.height * 0.5;
+
+      if (anchorScreenX === undefined && anchorScreenY === undefined && !this.hasManualPan) {
+        this.userZoom = clamped;
+        const z2 = Math.max(0.05, this.getEffectiveZoomScale());
+        const { fx: fx0, fy: fy0 } = this.getLiveFocalPoint();
+        const blend = clamped <= 1 ? 0 : Math.min(1, (clamped - 1) / 3);
+        const uSubj = fx0;
+        const vSubj = fy0 + (this.phase === 'MACRO' ? this.playerRadius * 0.65 * blend : 0);
+        const targetSx = fx0 + (cx - fx0) * blend;
+        const targetSy = fy0 + (Math.max(fy0, this.height * 0.73) - fy0) * blend;
+        this.panX = uSubj - cx - (targetSx - cx) / z2;
+        this.panY = vSubj - cy - (targetSy - cy) / z2;
+        this.clampPausedPan();
+        this.schedulePausedRender();
+      } else {
+        const z1 = Math.max(0.05, this.getEffectiveZoomScale());
+        this.userZoom = clamped;
+        const z2 = Math.max(0.05, this.getEffectiveZoomScale());
+        const mx = anchorScreenX ?? cx;
+        const my = anchorScreenY ?? cy;
+        if (anchorScreenX !== undefined && anchorScreenY !== undefined) {
+          this.hasManualPan = true;
+        }
+        this.panX += (mx - cx) * (1 / z1 - 1 / z2);
+        this.panY += (my - cy) * (1 / z1 - 1 / z2);
+        this.clampPausedPan();
+        this.schedulePausedRender();
+      }
+    } else {
+      this.userZoom = clamped;
+      this.savedLiveZoom = clamped;
+      this.hudDirty = true;
+    }
+  }
+
+  public zoomByFactor(
+    factor: number,
+    anchorScreenX?: number,
+    anchorScreenY?: number
+  ): void {
+    this.setUserZoom(this.userZoom * factor, anchorScreenX, anchorScreenY);
+  }
+
+  public panCamera(dxScreenPx: number, dyScreenPx: number): void {
+    if (!this.running || !this.paused || this.finishRecorded) return;
+    this.hasManualPan = true;
+    const zEff = Math.max(0.05, this.getEffectiveZoomScale());
+    this.panX -= dxScreenPx / zEff;
+    this.panY -= dyScreenPx / zEff;
+    this.clampPausedPan();
+    this.schedulePausedRender();
+  }
+
+  public resetCameraView(): void {
+    if (!this.running || this.finishRecorded) return;
+    this.userZoom = 1.0;
+    this.savedLiveZoom = 1.0;
+    this.panX = 0;
+    this.panY = 0;
+    this.hasManualPan = false;
+    if (this.paused) {
+      const { fx: fx0, fy: fy0 } = this.getLiveFocalPoint();
+      const cx = this.width * 0.5;
+      const cy = this.height * 0.5;
+      const zEff = Math.max(0.05, this.getEffectiveZoomScale());
+      this.panX = (fx0 - cx) * (1 - 1 / zEff);
+      this.panY = (fy0 - cy) * (1 - 1 / zEff);
+      this.clampPausedPan();
+      this.refreshPausedView(true);
+    } else {
+      this.hudDirty = true;
+    }
+  }
+
+  private schedulePausedRender(): void {
+    if (this.pausedRenderRaf !== 0) return;
+    this.pausedRenderRaf = requestAnimationFrame(() => {
+      this.pausedRenderRaf = 0;
+      if (this.running && this.paused) {
+        this.refreshPausedView(true);
+      }
+    });
+  }
+
+  private refreshPausedView(publish: boolean): void {
+    this.terrain.update(
+      this.cameraX,
+      this.width,
+      this.height,
+      this.elapsedSec,
+      this.pausedFreq,
+      this.computeViewWorldBounds(false)
+    );
+    this.renderCurrentState(this.pausedAudioSec, this.pausedFreq);
+    if (publish) {
+      this.publishHud(
+        this.audio.getProgress(),
+        this.paused ? this.lastSpeedMultiplier : 1.0,
+        false
+      );
+    }
+  }
+
   private resetState(): void {
+    this.paused = false;
+    this.pauseSeq++;
+    this.pausedAudioSec = 0;
+    this.pausedFreq = { low: 0.1, mid: 0.1, high: 0.1, overall: 0.1, isBeat: false };
+    this.lastSpeedMultiplier = 1.0;
+    this.userZoom = 1.0;
+    this.savedLiveZoom = 1.0;
+    this.panX = 0;
+    this.panY = 0;
+    this.hasManualPan = false;
+    cancelAnimationFrame(this.pausedRenderRaf);
+    this.pausedRenderRaf = 0;
+
     this.elapsedSec = 0;
     this.hudPublishAccum = 0;
     this.hudDirty = true;
@@ -347,11 +691,15 @@ export class GameEngine {
   }
 
   public setJumpHeld(held: boolean): void {
+    if (!this.running || this.paused) {
+      this.isJumpHeld = false;
+      return;
+    }
     this.isJumpHeld = held;
   }
 
   public setDiveHeld(held: boolean): void {
-    if (!this.running) {
+    if (!this.running || this.paused) {
       this.isDiveHeld = false;
       return;
     }
@@ -505,7 +853,7 @@ export class GameEngine {
   }
 
   public handlePrimaryAction(): void {
-    if (!this.running) return;
+    if (!this.running || this.paused) return;
     this.isJumpHeld = true;
 
     const playerScreenX = this.getPlayerScreenX();
@@ -554,7 +902,7 @@ export class GameEngine {
   }
 
   public handleFormSwap(targetForm?: ResonanceFormType): void {
-    if (!this.running) return;
+    if (!this.running || this.paused) return;
     const nextForm = targetForm ?? this.playerController.cycleForm();
     this.playerController.swapForm(nextForm);
     this.activeForm = nextForm;
@@ -571,7 +919,7 @@ export class GameEngine {
   }
 
   public handleSecondaryAction(): void {
-    if (!this.running) return;
+    if (!this.running || this.paused) return;
 
     if (this.phase === 'MICRO') {
       this.handlePrimaryAction();
@@ -639,7 +987,7 @@ export class GameEngine {
   }
 
   private loop = (now: number): void => {
-    if (!this.running) return;
+    if (!this.running || this.paused) return;
 
     const dt = Math.min(0.05, Math.max(0.001, (now - this.lastFrameTime) / 1000));
     this.lastFrameTime = now;
@@ -654,10 +1002,13 @@ export class GameEngine {
     }
 
     this.updateFrame(dt);
-    this.rafId = requestAnimationFrame(this.loop);
+    if (this.running && !this.paused) {
+      this.rafId = requestAnimationFrame(this.loop);
+    }
   };
 
   private updateFrame(dt: number): void {
+    if (this.paused) return;
     const freq = this.audio.getFrequencyData();
     const audioSec = this.audio.getElapsedSec();
 
@@ -720,6 +1071,7 @@ export class GameEngine {
     } else if (this.isGrinding) {
       speedMultiplier += 0.35;
     }
+    this.lastSpeedMultiplier = speedMultiplier;
 
     const playerScreenX = this.getPlayerScreenX();
     // Exact 0.0ms synchronization: advance by baseSpeed * dt first, then correct residual clock drift!
@@ -744,7 +1096,14 @@ export class GameEngine {
 
     const playerWorldX = this.cameraX + playerScreenX;
 
-    this.terrain.update(this.cameraX, this.width, this.height, this.elapsedSec, freq);
+    this.terrain.update(
+      this.cameraX,
+      this.width,
+      this.height,
+      this.elapsedSec,
+      freq,
+      this.computeViewWorldBounds(true)
+    );
 
     if (this.phase === 'MACRO') {
       this.updateMacroPhase(dt, playerScreenX, playerWorldX, audioSec, speedMultiplier);
@@ -761,7 +1120,8 @@ export class GameEngine {
     this.renderCurrentState(audioSec, freq);
 
     const progress = this.audio.getProgress();
-    const isFinished = progress >= 0.995 || (!this.audio.playing && this.elapsedSec > 2.0);
+    const isFinished =
+      !this.paused && (progress >= 0.995 || (!this.audio.playing && this.elapsedSec > 2.0));
     if (isFinished) {
       this.running = false;
       if (!this.finishRecorded) {
@@ -798,21 +1158,12 @@ export class GameEngine {
 
   private renderCurrentState(audioSec: number, freq: FrequencyBands): void {
     const playerScreenX = this.getPlayerScreenX();
-    // Beat Camera Zoom Punch & Damped Impact Shake in MACRO phase
-    const punchScale =
-      this.overdriveTimer > 0
-        ? 0.052
-        : this.currentSectionIntensity === 'drop'
-          ? 0.044
-          : 0.028;
-    const effectiveZoomScale =
-      this.phase === 'MACRO' ? 1.0 + this.beatPulse * punchScale : this.zoomScale;
-    const effectiveFocalX = this.phase === 'MACRO' ? playerScreenX : this.focalScreenX;
-    const effectiveFocalY = this.phase === 'MACRO' ? this.playerY : this.focalScreenY;
+    const effectiveZoomScale = this.getEffectiveZoomScale();
+    const { fx: effectiveFocalX, fy: effectiveFocalY } = this.getEffectiveFocalPoint();
 
     let shakeX = 0;
     let shakeY = 0;
-    if (this.shakeTimer > 0) {
+    if (this.shakeTimer > 0 && !this.paused) {
       const decay = this.shakeTimer / Math.max(0.01, this.shakeDuration);
       shakeX = Math.sin(this.elapsedSec * 67) * this.shakeIntensity * decay;
       shakeY = Math.cos(this.elapsedSec * 53) * this.shakeIntensity * decay;
@@ -832,10 +1183,12 @@ export class GameEngine {
       shakeY,
       phase: this.phase,
       zoomScale: effectiveZoomScale,
-      rebasedZoomDisplay: this.rebasedZoomDisplay,
+      rebasedZoomDisplay: this.rebasedZoomDisplay * this.userZoom,
       cameraX: this.cameraX,
       focalScreenX: effectiveFocalX,
       focalScreenY: effectiveFocalY,
+      panX: this.panX,
+      panY: this.panY,
       activeForm: this.activeForm,
       divingTargetForm: this.divingTargetForm,
       resonanceGauge: this.resonanceGauge,
@@ -873,6 +1226,12 @@ export class GameEngine {
     isFinished: boolean
   ): void {
     const { accuracy, rank } = this.scoreJudge.computeAccuracyAndRank();
+    const effectiveDisplayZoom = this.rebasedZoomDisplay * this.userZoom;
+    const neutralPan = this.paused ? this.getClampedNeutralPausedPan() : { panX: 0, panY: 0 };
+    const isPanned =
+      Math.abs(this.panX - neutralPan.panX) > 1 ||
+      Math.abs(this.panY - neutralPan.panY) > 1 ||
+      Math.abs(this.userZoom - 1) > 0.01;
 
     this.onHudUpdate({
       rendererMode: this.rendererMode,
@@ -880,7 +1239,7 @@ export class GameEngine {
       sfxMode: this.audio.getSfxMode(),
       fps: this.currentFps,
       phase: this.phase,
-      zoomDisplay: Number(this.rebasedZoomDisplay.toFixed(1)),
+      zoomDisplay: Number(effectiveDisplayZoom.toFixed(2)),
       score: Math.floor(this.scoreJudge.score),
       combo: this.scoreJudge.combo,
       maxCombo: this.scoreJudge.maxCombo,
@@ -910,6 +1269,9 @@ export class GameEngine {
       gimmicksTriggered: this.scoreJudge.gimmicksTriggered,
       isNewRecord: this.lastIsNewRecord,
       scoreDelta: this.lastScoreDelta,
+      isPaused: this.paused,
+      userZoom: Number(this.userZoom.toFixed(2)),
+      isPanned,
     });
   }
 

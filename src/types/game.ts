@@ -314,6 +314,8 @@ export interface RenderFrameState {
   cameraX: number;
   focalScreenX: number;
   focalScreenY: number;
+  panX?: number; // Unzoomed world/screen horizontal pan offset (px, default 0)
+  panY?: number; // Unzoomed world/screen vertical pan offset (px, default 0)
   activeForm: ResonanceFormType;
   divingTargetForm: ResonanceFormType;
   resonanceGauge: number;     // 0 ~ 100
@@ -380,6 +382,9 @@ export interface HUDTelemetry {
   gimmicksTriggered?: number;
   isNewRecord?: boolean;
   scoreDelta?: number;
+  isPaused?: boolean;
+  userZoom?: number; // User zoom multiplier (0.4~4.0 live, 0.20~20.0 paused)
+  isPanned?: boolean; // True when panX !== 0 || panY !== 0 || userZoom !== 1
 }
 
 /** Acoustic Zoom filter state. 'macro' = full spectrum, otherwise the isolated band. */

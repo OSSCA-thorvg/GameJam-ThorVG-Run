@@ -314,12 +314,15 @@ export class BezierTerrain {
     viewportWidth: number,
     viewportHeight: number,
     timeSec: number,
-    freq: FrequencyBands
+    freq: FrequencyBands,
+    viewWorldBounds?: { minX: number; maxX: number }
   ): void {
     this.viewportHeight = viewportHeight;
     const scaleY = viewportHeight / this.refHeight;
-    const minX = cameraX - this.segWidth * 2;
-    const maxX = cameraX + viewportWidth + this.segWidth * 4;
+    const physMinX = cameraX - this.segWidth * 2;
+    const physMaxX = cameraX + viewportWidth + this.segWidth * 4;
+    const minX = viewWorldBounds ? viewWorldBounds.minX : physMinX;
+    const maxX = viewWorldBounds ? viewWorldBounds.maxX : physMaxX;
 
     // 1. Direct index-calculated visible segments (O(K), zero array allocation)
     const startIdx = Math.max(0, Math.floor(minX / this.segWidth) + this.leadInSegments - 1);
@@ -546,5 +549,11 @@ export class BezierTerrain {
 
   public getHoldRails(): HoldRail[] {
     return this.visibleHoldRails;
+  }
+
+  public getMaxWorldX(): number {
+    return this.allSegments.length > 0
+      ? this.allSegments[this.allSegments.length - 1]!.x1
+      : 0;
   }
 }

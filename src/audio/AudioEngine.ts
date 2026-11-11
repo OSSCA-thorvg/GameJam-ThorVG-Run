@@ -193,6 +193,58 @@ export class AudioEngine {
 
     source.onended = () => {
       if (this.sourceNode === source) {
+        this.pauseOffset = this.getDurationSec();
+        this.isPlaying = false;
+      }
+    };
+  }
+
+  public pause(): void {
+    if (!this.ctx || !this.isPlaying) return;
+    this.pauseOffset = Math.min(
+      this.getDurationSec(),
+      Math.max(0, this.ctx.currentTime - this.startTimestamp)
+    );
+    this.stopSourceOnly();
+    this.isPlaying = false;
+  }
+
+  public async resume(): Promise<void> {
+    if (this.isPlaying) return;
+    const ctx = this.ensureContext();
+    if (ctx.state === 'suspended') {
+      await ctx.resume();
+    }
+
+    if (!this.currentBuffer) {
+      this.currentBuffer = createFallbackBuffer(ctx, this.currentTrack.durationSec);
+    }
+
+    const dur = this.currentBuffer.duration;
+    if (this.pauseOffset >= dur - 0.015) {
+      this.pauseOffset = dur;
+      this.isPlaying = false;
+      return;
+    }
+
+    const prevZoom = this.currentZoomMode;
+    this.stopSourceOnly();
+
+    const source = ctx.createBufferSource();
+    source.buffer = this.currentBuffer;
+    source.loop = false;
+    source.connect(this.filterNode!);
+
+    const offset = Math.max(0, this.pauseOffset);
+    this.startTimestamp = ctx.currentTime - offset;
+    source.start(0, offset);
+    this.sourceNode = source;
+    this.isPlaying = true;
+    this.setAcousticZoom(prevZoom);
+
+    source.onended = () => {
+      if (this.sourceNode === source) {
+        this.pauseOffset = this.getDurationSec();
         this.isPlaying = false;
       }
     };

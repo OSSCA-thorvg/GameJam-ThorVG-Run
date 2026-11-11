@@ -3,6 +3,7 @@ import { AudioEngine } from './audio/AudioEngine';
 import type { AudioFormat } from './audio/audioFormats';
 import { BUILT_IN_TRACKS } from './audio/proceduralTracks';
 import { InGameHUD } from './components/InGameHUD';
+import { PauseOverlay } from './components/PauseOverlay';
 import { ResultModal } from './components/ResultModal';
 import { StartScreen } from './components/StartScreen';
 import { TrackLoadingModal } from './components/TrackLoadingModal';
@@ -186,13 +187,41 @@ export const App: React.FC = () => {
     launchSeqRef.current++;
     gameEngineRef.current?.stopRun();
     rendererRef.current?.clearForTransition();
+    setHud((prev) => ({ ...prev, isPaused: false, userZoom: 1.0, isPanned: false }));
     setScreen('menu');
+  }, []);
+
+  const handleTogglePause = useCallback(() => {
+    audioRef.current?.unlockFromGesture();
+    gameEngineRef.current?.togglePause();
+  }, []);
+
+  const handlePauseRun = useCallback(() => {
+    gameEngineRef.current?.pauseRun();
+  }, []);
+
+  const handleResumeRun = useCallback(() => {
+    audioRef.current?.unlockFromGesture();
+    void gameEngineRef.current?.resumeRun();
+  }, []);
+
+  const handleStepZoom = useCallback((factor: number) => {
+    gameEngineRef.current?.zoomByFactor(factor);
+  }, []);
+
+  const handleSetZoom = useCallback((zoom: number) => {
+    gameEngineRef.current?.setUserZoom(zoom);
+  }, []);
+
+  const handleResetView = useCallback(() => {
+    gameEngineRef.current?.resetCameraView();
   }, []);
 
   // Command-Pattern InputController binding keyboard & pointer controls once
   useEffect(() => {
     const controller = new InputController({
       isGameActive: () => inGameRef.current,
+      isPaused: () => Boolean(gameEngineRef.current?.isPaused),
       isRunFinished: () => isFinishedRef.current,
       onPrimaryPress: () => gameEngineRef.current?.handlePrimaryAction(),
       onPrimaryRelease: () => gameEngineRef.current?.setJumpHeld(false),
@@ -208,10 +237,23 @@ export const App: React.FC = () => {
           setHud((prev) => ({ ...prev, sfxMode: next }));
         }
       },
-      onPauseOrExit: handleReturnToMenu,
+      onTogglePause: handleTogglePause,
+      onExitToMenu: handleReturnToMenu,
+      onWheelZoom: (factor, canvasX, canvasY) => {
+        gameEngineRef.current?.zoomByFactor(factor, canvasX, canvasY);
+      },
+      onStepZoom: (factor) => {
+        gameEngineRef.current?.zoomByFactor(factor);
+      },
+      onResetZoom: () => {
+        gameEngineRef.current?.resetCameraView();
+      },
+      onPanDelta: (dx, dy) => {
+        gameEngineRef.current?.panCamera(dx, dy);
+      },
     });
     return controller.attach(shellRef.current);
-  }, [handleReturnToMenu]);
+  }, [handleReturnToMenu, handleTogglePause]);
 
   const handleUploadFile = useCallback(
     async (file: File, supportedFormats: readonly AudioFormat[]) => {
@@ -291,7 +333,12 @@ export const App: React.FC = () => {
   return (
     <div ref={shellRef} className="app-shell">
       {/* Keyed by rendererMode so React cleanly replaces DOM <canvas> on CPU <-> GPU switch */}
-      <canvas key={rendererMode} ref={canvasRef} id="tvg-canvas" className="tvg-canvas" />
+      <canvas
+        key={rendererMode}
+        ref={canvasRef}
+        id="tvg-canvas"
+        className={`tvg-canvas${inGame && hud.isPaused && !hud.isFinished ? ' paused-inspectable' : ''}`}
+      />
 
       {screen === 'menu' && (
         <StartScreen
@@ -315,11 +362,14 @@ export const App: React.FC = () => {
         />
       )}
 
-      {inGame && (
+      {inGame && !hud.isPaused && !hud.isFinished && (
         <InGameHUD
           hud={hud}
           trackTitle={trackTitle(t, selectedTrack)}
           onReturnToMenu={handleReturnToMenu}
+          onPause={handlePauseRun}
+          onStepZoom={handleStepZoom}
+          onResetZoom={handleResetView}
           onToggleRendererInGame={(nextMode) => setRendererMode(nextMode)}
           onSwapForm={(form) => gameEngineRef.current?.handleFormSwap(form)}
           onCycleSfxMode={() => {
@@ -331,6 +381,19 @@ export const App: React.FC = () => {
           onActivateOverdrive={() => {
             gameEngineRef.current?.activateOverdrive();
           }}
+        />
+      )}
+
+      {inGame && Boolean(hud.isPaused) && !hud.isFinished && (
+        <PauseOverlay
+          hud={hud}
+          trackTitle={trackTitle(t, selectedTrack)}
+          onResume={handleResumeRun}
+          onReturnToMenu={handleReturnToMenu}
+          onSetZoom={handleSetZoom}
+          onStepZoom={handleStepZoom}
+          onResetView={handleResetView}
+          onToggleRenderer={(nextMode) => setRendererMode(nextMode)}
         />
       )}
 

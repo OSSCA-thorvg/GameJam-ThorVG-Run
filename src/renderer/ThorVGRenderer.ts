@@ -477,14 +477,19 @@ export class ThorVGRenderer {
     const { width, height, phase, activeForm, frequency } = state;
     const [fr, fg, fb] = FORM_CONFIG[activeForm].rgb;
 
-    const zoom = state.zoomScale;
+    const zoom = Math.max(0.05, state.zoomScale);
     const fx = state.focalScreenX;
     const fy = state.focalScreenY;
+    const panX = state.panX ?? 0;
+    const panY = state.panY ?? 0;
     const sxOff = state.shakeX ?? 0;
     const syOff = state.shakeY ?? 0;
-    const tx = (x: number) => (zoom === 1 ? x : fx + (x - fx) * zoom) + sxOff;
-    const ty = (y: number) => (zoom === 1 ? y : fy + (y - fy) * zoom) + syOff;
-    const ts = (s: number) => s * Math.min(zoom, 8);
+    const tx = (x: number) => fx + (x - panX - fx) * zoom + sxOff;
+    const ty = (y: number) => fy + (y - panY - fy) * zoom + syOff;
+    const invTx = (sx: number) => panX + fx + (sx - sxOff - fx) / zoom;
+    const invTy = (sy: number) => panY + fy + (sy - syOff - fy) / zoom;
+    // Linear up to 24x so 0.20x..20.0x user zoom has 0.0px foot-to-floor error, while 50x portal dive remains bounded on CPU SwCanvas
+    const ts = (s: number) => s * Math.min(zoom, 24);
 
     // 1. Background
     const pulseBoost = Math.floor((frequency.low * 0.6 + (state.beatPulse ?? 0) * 0.5) * 28);
@@ -511,21 +516,26 @@ export class ThorVGRenderer {
         );
     }
 
-    // 2. Dynamic Speed Grid
+    // 2. Dynamic Speed Grid (Inverse-projected full-viewport adaptive vector grid)
     shapes.grid.reset();
-    const gridStep = 80;
-    const offsetX = -(((state.cameraX % gridStep) + gridStep) % gridStep);
-    for (let x = offsetX; x <= width; x += gridStep) {
-      const sx = tx(x);
-      if (sx >= -20 && sx <= width + 20) {
-        shapes.grid.moveTo(sx, 0).lineTo(sx, height);
-      }
+    let gridStep = 80;
+    while (gridStep * zoom < 28) gridStep *= 2;
+    while (gridStep * zoom > 220 && gridStep > 20) gridStep *= 0.5;
+
+    const minWorldX = state.cameraX + invTx(-20);
+    const maxWorldX = state.cameraX + invTx(width + 20);
+    const firstWorldX = Math.floor(minWorldX / gridStep) * gridStep;
+    for (let wx = firstWorldX; wx <= maxWorldX; wx += gridStep) {
+      const sx = tx(wx - state.cameraX);
+      shapes.grid.moveTo(sx, 0).lineTo(sx, height);
     }
-    for (let y = 90; y < height; y += gridStep) {
-      const sy = ty(y);
-      if (sy >= -20 && sy <= height + 20) {
-        shapes.grid.moveTo(0, sy).lineTo(width, sy);
-      }
+
+    const minWorldY = invTy(-20);
+    const maxWorldY = invTy(height + 20);
+    const firstWorldY = Math.floor(minWorldY / gridStep) * gridStep;
+    for (let wy = firstWorldY; wy <= maxWorldY; wy += gridStep) {
+      const sy = ty(wy);
+      shapes.grid.moveTo(0, sy).lineTo(width, sy);
     }
     shapes.grid.stroke({
       width: 1,
@@ -533,7 +543,7 @@ export class ThorVGRenderer {
     });
 
     if (phase === 'MICRO') {
-      renderMicroTunnelPass(shapes, state);
+      renderMicroTunnelPass(shapes, state, tx, ty, ts, invTx);
     } else {
       renderMacroWorldPass(shapes, state, tx, ty, ts);
     }
@@ -564,8 +574,8 @@ export class ThorVGRenderer {
 
     for (const sw of state.shockwaves) {
       const target = pickVfxBucket(sw.color);
-      const rOuter = ts(sw.radius);
-      const rInner = Math.max(2, rOuter - ts(3.2));
+      const rOuter = Math.max(2.5, ts(sw.radius));
+      const rInner = Math.max(1.2, rOuter - Math.max(1.2, ts(3.2)));
       // Append thin ring path so fill() paints both shockwaves & diamond shards in one additive pass!
       target.appendCircle(tx(sw.x), ty(sw.y), rOuter, rOuter);
       target.appendCircle(tx(sw.x), ty(sw.y), rInner, rInner);
@@ -665,7 +675,7 @@ export class ThorVGRenderer {
     // 5. Crisp 4-Point Vector Diamond Shards routed into 3-Color Additive VFX Buckets
     for (const pt of state.particles) {
       const target = pickVfxBucket(pt.color);
-      const rad = Math.max(2.0, pt.radius * 1.25);
+      const rad = Math.max(1.4, ts(pt.radius * 1.25));
       const sx = tx(pt.x);
       const sy = ty(pt.y);
       target
@@ -675,23 +685,24 @@ export class ThorVGRenderer {
         .lineTo(sx - rad, sy)
         .close();
     }
+    const vfxStrokeW = Math.max(0.8, Math.min(4.0, ts(1.4)));
     if (hasGold) {
       shapes.vfxGold
         .fillRule(shapes.evenOddRule)
         .fill(255, 230, 65, 220)
-        .stroke({ width: 1.4, color: [255, 250, 190, 235] });
+        .stroke({ width: vfxStrokeW, color: [255, 250, 190, 235] });
     }
     if (hasCyan) {
       shapes.vfxCyan
         .fillRule(shapes.evenOddRule)
         .fill(5, 213, 255, 220)
-        .stroke({ width: 1.4, color: [195, 248, 255, 235] });
+        .stroke({ width: vfxStrokeW, color: [195, 248, 255, 235] });
     }
     if (hasCrimson) {
       shapes.vfxCrimson
         .fillRule(shapes.evenOddRule)
         .fill(255, 45, 108, 220)
-        .stroke({ width: 1.4, color: [255, 200, 220, 235] });
+        .stroke({ width: vfxStrokeW, color: [255, 200, 220, 235] });
     }
 
     this.canvas.update().render();

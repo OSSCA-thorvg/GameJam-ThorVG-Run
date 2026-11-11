@@ -11,7 +11,10 @@ import {
 interface InGameHUDProps {
   hud: HUDTelemetry;
   trackTitle: string;
-  onReturnToMenu: () => void;
+  onReturnToMenu?: () => void;
+  onPause: () => void;
+  onStepZoom: (factor: number) => void;
+  onResetZoom: () => void;
   onToggleRendererInGame: (next: RendererMode) => void;
   onSwapForm: (form: ResonanceFormType) => void;
   onCycleSfxMode: () => void;
@@ -21,7 +24,9 @@ interface InGameHUDProps {
 export const InGameHUD: React.FC<InGameHUDProps> = ({
   hud,
   trackTitle,
-  onReturnToMenu,
+  onPause,
+  onStepZoom,
+  onResetZoom,
   onToggleRendererInGame,
   onSwapForm,
   onCycleSfxMode,
@@ -79,10 +84,16 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
         ? format(t.hud.overdriveActive, { value: hud.resonanceGauge })
         : format(t.hud.resonance, { value: hud.resonanceGauge });
 
+  const zoomDisplayText =
+    hud.zoomDisplay < 1 ? hud.zoomDisplay.toFixed(2) : hud.zoomDisplay.toFixed(1);
+  const userZoom = hud.userZoom ?? 1.0;
+  const userZoomText = userZoom < 1 ? userZoom.toFixed(2) : userZoom.toFixed(1);
+  const isZoomDefault = !hud.isPanned && Math.abs(userZoom - 1) < 0.01;
+
   return (
     <div className="hud-overlay">
       {/* Top-left: renderer badge, difficulty, FPS, speed, accuracy, notes, prism stars, NO MISS */}
-      <div className="hud-top-left">
+      <div className="hud-top-left" data-ui-panel="true">
         <div className="hud-badge-row">
           <span className={`renderer-badge ${hud.rendererMode === 'gl' ? 'gpu' : 'cpu'}`}>
             {hud.rendererMode === 'sw' ? t.hud.modeCpu : t.hud.modeGpu}
@@ -104,7 +115,7 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
             {t.hud.phase}: <strong>{t.phases[hud.phase]}</strong>
           </span>
           <span>
-            ZOOM: <strong>{hud.zoomDisplay.toFixed(1)}x</strong>
+            ZOOM: <strong>{zoomDisplayText}x</strong>
           </span>
           <span>
             {t.hud.audioFilter}: <strong>{t.filter[hud.acousticFilter]}</strong>
@@ -113,8 +124,8 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
         </div>
       </div>
 
-      {/* Top-right: score, uncapped combo, track progress, live SFX mode & renderer controls */}
-      <div className="hud-top-right">
+      {/* Top-right: score, uncapped combo, track progress, live SFX mode, zoom & pause controls */}
+      <div className="hud-top-right" data-ui-panel="true">
         <div className="score-row">
           <div className="score-box">
             <small>{t.hud.score}</small>
@@ -162,8 +173,46 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
             {hud.rendererMode === 'sw' ? t.hud.toGpu : t.hud.toCpu}
           </button>
         </div>
-        <button type="button" className="hud-btn menu-return-btn" onClick={onReturnToMenu}>
-          {t.hud.menuReturn}
+
+        <div className="hud-zoom-bar" data-ui-panel="true">
+          <button
+            type="button"
+            data-testid="hud-zoom-out"
+            className="hud-btn hud-zoom-step-btn"
+            title={t.hud.zoomOutTitle}
+            onClick={() => onStepZoom(1 / 1.25)}
+          >
+            −
+          </button>
+          <span className="hud-zoom-value" data-testid="hud-zoom-value">
+            🔍 {userZoomText}x
+          </span>
+          <button
+            type="button"
+            data-testid="hud-zoom-in"
+            className="hud-btn hud-zoom-step-btn"
+            title={t.hud.zoomInTitle}
+            onClick={() => onStepZoom(1.25)}
+          >
+            +
+          </button>
+          <button
+            type="button"
+            data-testid="hud-zoom-reset"
+            className={`hud-btn hud-zoom-reset-btn${isZoomDefault ? ' is-default' : ''}`}
+            onClick={onResetZoom}
+          >
+            {t.hud.zoomReset}
+          </button>
+        </div>
+
+        <button
+          type="button"
+          data-testid="hud-pause-btn"
+          className="hud-btn pause-trigger-btn"
+          onClick={onPause}
+        >
+          {t.hud.pauseBtn}
         </button>
       </div>
 
@@ -198,7 +247,7 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
       )}
 
       {/* Bottom-center: Manual Overdrive button, 3-color forms, and Resonance / Micro Sync bar */}
-      <div className="hud-bottom-center">
+      <div className="hud-bottom-center" data-ui-panel="true">
         {hud.overdriveReady && (
           <button
             type="button"
