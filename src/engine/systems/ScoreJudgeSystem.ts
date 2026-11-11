@@ -19,7 +19,6 @@ export class ScoreJudgeSystem {
   public orbsCollected: number = 0;
   public starsCollected: number = 0;
   public trapsDestroyed: number = 0;
-  public divesCompleted: number = 0;
   public gimmicksTriggered: number = 0;
   public activeJudgment: JudgmentFeedback | null = null;
 
@@ -35,7 +34,6 @@ export class ScoreJudgeSystem {
     this.orbsCollected = 0;
     this.starsCollected = 0;
     this.trapsDestroyed = 0;
-    this.divesCompleted = 0;
     this.gimmicksTriggered = 0;
     this.judgmentCounts = { perfect: 0, great: 0, good: 0, miss: 0 };
     this.activeJudgment = null;
@@ -90,11 +88,6 @@ export class ScoreJudgeSystem {
 
   public recordTrapDestroyed(count: number = 1): void {
     this.trapsDestroyed += count;
-    this.dirty = true;
-  }
-
-  public recordDiveCompleted(): void {
-    this.divesCompleted++;
     this.dirty = true;
   }
 

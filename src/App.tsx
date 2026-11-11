@@ -18,15 +18,29 @@ import {
   type HUDTelemetry,
   type LoadingProgress,
   type RendererMode,
+  type ResonanceFormType,
   type TrackMetadata,
 } from './types/game';
+
+const PLAYSTYLE_STORAGE_KEY = 'thorvg-run:playstyle:v1';
+
+function loadInitialPlaystyle(): ResonanceFormType {
+  try {
+    const raw = window.localStorage.getItem(PLAYSTYLE_STORAGE_KEY);
+    if (raw === 'bass' || raw === 'synth' || raw === 'treble') {
+      return raw;
+    }
+  } catch {
+    // Ignore storage access errors (e.g. private browsing / restricted context).
+  }
+  return 'synth';
+}
 
 const INITIAL_HUD: HUDTelemetry = {
   rendererMode: 'sw',
   difficulty: 'normal',
   sfxMode: 'full',
   fps: 60,
-  phase: 'MACRO',
   zoomDisplay: 1.0,
   score: 0,
   combo: 1,
@@ -34,14 +48,13 @@ const INITIAL_HUD: HUDTelemetry = {
   progress: 0,
   activeForm: 'synth',
   resonanceGauge: 40,
-  microSyncProgress: 0,
+  skillCooldownRatio: 0,
+  skillCooldownSec: 0,
   overdriveReady: false,
   overdriveActive: false,
-  acousticFilter: 'macro',
   statusBanner: null,
   isFinished: false,
   trapsDestroyed: 0,
-  divesCompleted: 0,
   surfMomentum: 0.25,
   speedMultiplier: 1.0,
   orbsCollected: 0,
@@ -65,6 +78,7 @@ export const App: React.FC = () => {
   const [rendererMode, setRendererMode] = useState<RendererMode>('sw');
   const [selectedTrack, setSelectedTrack] = useState<TrackMetadata>(BUILT_IN_TRACKS[0]!);
   const [customTracks, setCustomTracks] = useState<TrackMetadata[]>([]);
+  const [playstyle, setPlaystyle] = useState<ResonanceFormType>(() => loadInitialPlaystyle());
   const [difficulty, setDifficulty] = useState<DifficultyMode>('normal');
   const [engineReady, setEngineReady] = useState<boolean>(false);
   /** Increments each time a renderer finishes init, so loops can restart on the new instance. */
@@ -72,7 +86,10 @@ export const App: React.FC = () => {
   const [launchKey, setLaunchKey] = useState<number>(0);
   const [screen, setScreen] = useState<Screen>('splash');
   const inGame = screen === 'game';
-  const [hud, setHud] = useState<HUDTelemetry>(INITIAL_HUD);
+  const [hud, setHud] = useState<HUDTelemetry>(() => ({
+    ...INITIAL_HUD,
+    activeForm: playstyle,
+  }));
   const [loadingState, setLoadingState] = useState<LoadingProgress>({
     progress: 0,
     stage: 'decoding',
@@ -85,6 +102,8 @@ export const App: React.FC = () => {
   const gameEngineRef = useRef<GameEngine | null>(null);
 
   // Refs read by RAF preview and InputController without re-subscribing listeners.
+  const playstyleRef = useRef<ResonanceFormType>(playstyle);
+  playstyleRef.current = playstyle;
   const difficultyRef = useRef<DifficultyMode>(difficulty);
   difficultyRef.current = difficulty;
   const inGameRef = useRef<boolean>(inGame);
@@ -100,10 +119,16 @@ export const App: React.FC = () => {
     audioRef.current = new AudioEngine();
   }
   if (!gameEngineRef.current) {
-    gameEngineRef.current = new GameEngine(audioRef.current, (nextHud) => {
+    const engine = new GameEngine(audioRef.current, (nextHud) => {
       setHud(nextHud);
     });
+    engine.setPlaystyle(playstyle);
+    gameEngineRef.current = engine;
   }
+
+  useEffect(() => {
+    gameEngineRef.current?.setPlaystyle(playstyle);
+  }, [playstyle]);
 
   // Create the ThorVG renderer ('sw' SwCanvas or 'gl' GlCanvas) on a fresh
   // <canvas key={rendererMode} />. Re-created ONLY when the renderer backend changes.
@@ -164,7 +189,7 @@ export const App: React.FC = () => {
     const start = performance.now();
     const tick = (now: number) => {
       const speedPx = DIFFICULTY_CONFIG[difficultyRef.current].worldPxPerSec;
-      renderer.renderPreviewFrame((now - start) / 1000, 'synth', speedPx);
+      renderer.renderPreviewFrame((now - start) / 1000, playstyleRef.current, speedPx);
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
@@ -227,7 +252,6 @@ export const App: React.FC = () => {
       onPrimaryRelease: () => gameEngineRef.current?.setJumpHeld(false),
       onDiveHoldChange: (held) => gameEngineRef.current?.setDiveHeld(held),
       onSecondaryPress: () => gameEngineRef.current?.handleSecondaryAction(),
-      onSwapForm: (form) => gameEngineRef.current?.handleFormSwap(form),
       onActivateOverdrive: () => {
         gameEngineRef.current?.activateOverdrive();
       },
@@ -265,6 +289,18 @@ export const App: React.FC = () => {
     []
   );
 
+  const handleSelectPlaystyle = useCallback((nextStyle: ResonanceFormType) => {
+    playstyleRef.current = nextStyle;
+    setPlaystyle(nextStyle);
+    try {
+      window.localStorage.setItem(PLAYSTYLE_STORAGE_KEY, nextStyle);
+    } catch {
+      // Ignore storage access errors.
+    }
+    gameEngineRef.current?.setPlaystyle(nextStyle);
+    setHud((prev) => ({ ...prev, activeForm: nextStyle }));
+  }, []);
+
   const handleSelectDifficulty = useCallback((nextDiff: DifficultyMode) => {
     setDifficulty(nextDiff);
     gameEngineRef.current?.setDifficulty(nextDiff);
@@ -277,12 +313,13 @@ export const App: React.FC = () => {
     audioRef.current?.unlockFromGesture();
     const seq = ++launchSeqRef.current;
     rendererRef.current?.clearForTransition();
+    engine.setPlaystyle(playstyle);
     setHud((prev) => ({
       ...INITIAL_HUD,
       rendererMode,
       difficulty,
       sfxMode: gameEngineRef.current?.getSfxMode() ?? prev.sfxMode ?? 'full',
-      activeForm: prev.activeForm,
+      activeForm: playstyle,
     }));
     setLoadingState({ progress: 0.06, stage: 'decoding' });
     setScreen('loading');
@@ -305,7 +342,7 @@ export const App: React.FC = () => {
         await new Promise((r) => setTimeout(r, 480));
         if (launchSeqRef.current !== seq) return;
 
-        const runPromise = engine.startRun(selectedTrack, undefined, difficulty);
+        const runPromise = engine.startRun(selectedTrack, undefined, difficulty, playstyle);
         setLaunchKey((k) => k + 1);
         setScreen('game');
         await runPromise;
@@ -316,7 +353,7 @@ export const App: React.FC = () => {
         }
       }
     })();
-  }, [difficulty, rendererMode, selectedTrack]);
+  }, [difficulty, playstyle, rendererMode, selectedTrack]);
 
   const handleSwitchRendererAndReplay = useCallback(
     (nextMode: RendererMode) => {
@@ -345,11 +382,13 @@ export const App: React.FC = () => {
           selectedTrack={selectedTrack}
           customTracks={customTracks}
           rendererMode={rendererMode}
+          playstyle={playstyle}
           difficulty={difficulty}
           engineReady={engineReady}
           onSelectTrack={setSelectedTrack}
           onUploadFile={handleUploadFile}
           onSelectRenderer={setRendererMode}
+          onSelectPlaystyle={handleSelectPlaystyle}
           onSelectDifficulty={handleSelectDifficulty}
           onStartRun={handleStartRun}
         />
@@ -371,7 +410,6 @@ export const App: React.FC = () => {
           onStepZoom={handleStepZoom}
           onResetZoom={handleResetView}
           onToggleRendererInGame={(nextMode) => setRendererMode(nextMode)}
-          onSwapForm={(form) => gameEngineRef.current?.handleFormSwap(form)}
           onCycleSfxMode={() => {
             const next = gameEngineRef.current?.cycleSfxMode();
             if (next) {

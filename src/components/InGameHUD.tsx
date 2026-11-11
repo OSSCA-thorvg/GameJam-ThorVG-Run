@@ -5,7 +5,6 @@ import {
   FORM_CONFIG,
   type HUDTelemetry,
   type RendererMode,
-  type ResonanceFormType,
 } from '../types/game';
 
 interface InGameHUDProps {
@@ -16,7 +15,6 @@ interface InGameHUDProps {
   onStepZoom: (factor: number) => void;
   onResetZoom: () => void;
   onToggleRendererInGame: (next: RendererMode) => void;
-  onSwapForm: (form: ResonanceFormType) => void;
   onCycleSfxMode: () => void;
   onActivateOverdrive: () => void;
 }
@@ -28,7 +26,6 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
   onStepZoom,
   onResetZoom,
   onToggleRendererInGame,
-  onSwapForm,
   onCycleSfxMode,
   onActivateOverdrive,
 }) => {
@@ -76,13 +73,18 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
             }
       : null;
 
-  const displayGauge = hud.phase === 'MICRO' ? (hud.microSyncProgress ?? 0) : hud.resonanceGauge;
-  const gaugeLabel =
-    hud.phase === 'MICRO'
-      ? format(t.hud.microSync, { value: displayGauge })
-      : hud.overdriveActive
-        ? format(t.hud.overdriveActive, { value: hud.resonanceGauge })
-        : format(t.hud.resonance, { value: hud.resonanceGauge });
+  const displayGauge = hud.resonanceGauge;
+  const gaugeLabel = hud.overdriveActive
+    ? format(t.hud.overdriveActive, { value: hud.resonanceGauge })
+    : format(t.hud.resonance, { value: hud.resonanceGauge });
+
+  const isSkillCoolingDown = (hud.skillCooldownRatio ?? 0) > 0.02;
+  const skillStatusLabel = isSkillCoolingDown
+    ? format(t.hud.skillCooldown, {
+        skill: formText.skillName,
+        sec: (hud.skillCooldownSec ?? 0).toFixed(1),
+      })
+    : format(t.hud.skillReady, { skill: formText.skillName });
 
   const zoomDisplayText =
     hud.zoomDisplay < 1 ? hud.zoomDisplay.toFixed(2) : hud.zoomDisplay.toFixed(1);
@@ -112,14 +114,13 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
         </div>
         <div className="hud-sub-status">
           <span>
-            {t.hud.phase}: <strong>{t.phases[hud.phase]}</strong>
+            {t.hud.styleLabel}:{' '}
+            <strong style={{ color: formCfg.colorHex }}>{formText.name}</strong>
           </span>
           <span>
             ZOOM: <strong>{zoomDisplayText}x</strong>
           </span>
-          <span>
-            {t.hud.audioFilter}: <strong>{t.filter[hud.acousticFilter]}</strong>
-          </span>
+          <span className="pure-audio-pill">🎵 {t.hud.pureAudio}</span>
           <span className={`section-pill ${intensity}`}>{sectionLabel}</span>
         </div>
       </div>
@@ -246,7 +247,7 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
         </div>
       )}
 
-      {/* Bottom-center: Manual Overdrive button, 3-color forms, and Resonance / Micro Sync bar */}
+      {/* Bottom-center: Manual Overdrive button, active playstyle + [Shift] skill status, and Resonance Overdrive bar */}
       <div className="hud-bottom-center" data-ui-panel="true">
         {hud.overdriveReady && (
           <button
@@ -259,34 +260,31 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
           </button>
         )}
 
-        <div className="resonance-forms-strip">
-          {(['bass', 'synth', 'treble'] as ResonanceFormType[]).map((formKey, idx) => {
-            const cfg = FORM_CONFIG[formKey];
-            const isCurrent = hud.activeForm === formKey;
-            return (
-              <button
-                key={formKey}
-                type="button"
-                className={`resonance-pill ${isCurrent ? 'active' : ''}`}
-                style={{
-                  borderColor: isCurrent ? cfg.colorHex : undefined,
-                  boxShadow: isCurrent ? `0 0 16px ${cfg.colorHex}55` : undefined,
-                }}
-                onClick={() => onSwapForm(formKey)}
-              >
-                <span className="pill-key">[{idx + 1}]</span>
-                <strong style={{ color: cfg.colorHex }}>{t.forms[formKey].short}</strong>
-                <small>{t.forms[formKey].skillName}</small>
-              </button>
-            );
-          })}
-        </div>
-
         <div className="gauge-wrapper">
           <div className="gauge-header">
-            <span style={{ color: hud.overdriveActive ? '#FFE600' : formCfg.colorHex }}>
-              ◆ {formText.name} — {formText.skillDesc}
-            </span>
+            <div className="gauge-style-skill">
+              <strong
+                className="hud-style-name"
+                style={{ color: hud.overdriveActive ? '#FFE600' : formCfg.colorHex }}
+              >
+                ◆ {formText.name}
+              </strong>
+              <span
+                data-testid="hud-skill-status"
+                className={`hud-skill-pill ${isSkillCoolingDown ? 'cooldown' : 'ready'}`}
+                style={
+                  !isSkillCoolingDown
+                    ? {
+                        borderColor: `${formCfg.colorHex}88`,
+                        color: formCfg.colorHex,
+                        backgroundColor: `${formCfg.colorHex}1F`,
+                      }
+                    : undefined
+                }
+              >
+                {skillStatusLabel}
+              </span>
+            </div>
             <strong className={hud.overdriveReady || hud.overdriveActive ? 'gauge-text-hot' : ''}>
               {gaugeLabel}
             </strong>

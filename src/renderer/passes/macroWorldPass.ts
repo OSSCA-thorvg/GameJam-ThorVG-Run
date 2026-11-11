@@ -12,11 +12,11 @@ import { resetWorldShapeLayers, type TvgShapePool } from './shapePool';
 export type ScreenTransformFn = (val: number) => number;
 
 /**
- * Stateless Phase 1 (Macro Runner World) Render Pass:
+ * Stateless Runner World Render Pass:
  * - Horizon aurora ribbons during `DROP` & `RESONANCE OVERDRIVE`
  * - Contiguous cubic-bezier sprint decks with abyss chasm breaks & equalizer bars
  * - True 3-Color Band Neon Separation (`Bass` #FF2A6D, `Synth` #05D5FF, `Treble` #FFE600)
- *   for 2F Sky Platforms, Hold Rails & Rhythm Beat Notes (with active-match highlight!)
+ *   for 2F Sky Platforms, Hold Rails & Rhythm Beat Notes (omni-resonant neon clarity across all bands)
  * - `JumpPad`, `SlamPad` (downward double-chevron anvil), `DashRing`, `★ Prism Stars`,
  *   ground `BeatTrap` spikes, and spinning aerial `BeatDrone` rotors
  */
@@ -27,7 +27,7 @@ export function renderMacroWorldPass(
   ty: ScreenTransformFn,
   ts: ScreenTransformFn
 ): void {
-  const { width, height, activeForm, frequency, segments, traps, divingNodes, cameraX } = state;
+  const { width, height, activeForm, frequency, segments, traps, cameraX } = state;
   const formCfg = FORM_CONFIG[activeForm];
   const [fr, fg, fb] = formCfg.rgb;
   const [sr, sg, sb] = formCfg.secondaryRgb;
@@ -321,8 +321,7 @@ export function renderMacroWorldPass(
     const ox = tx(orb.worldX - cameraX);
     if (ox < -cullPad || ox > width + cullPad) continue;
     const oy = ty(orb.screenY ?? orb.worldY);
-    const isMatched = isOverdrive || activeForm === orb.band;
-    const pulse = 1 + Math.sin(state.timeSec * 8 + orb.id * 0.7) * (isMatched ? 0.19 : 0.12);
+    const pulse = 1 + Math.sin(state.timeSec * 8 + orb.id * 0.7) * (isOverdrive ? 0.2 : 0.17);
     const rad = ts(orb.radius * pulse);
 
     if (orb.isPrismStar) {
@@ -356,18 +355,17 @@ export function renderMacroWorldPass(
     }
   }
 
-  // Paint each of the 3 frequency band layers with active-synergy glow boost!
+  // Paint all 3 frequency band layers with crisp, vibrant neon core & bright stroke
   const bandsOrder: ResonanceFormType[] = ['bass', 'synth', 'treble'];
   for (const b of bandsOrder) {
     if (!hasBandContent[b]) continue;
     const [br, bgc, bb] = FORM_CONFIG[b].rgb;
-    const matched = isOverdrive || activeForm === b;
     const shape = b === 'bass' ? shapes.bandBass : b === 'synth' ? shapes.bandSynth : shapes.bandTreble;
     shape
-      .fill(br, bgc, bb, matched ? 242 : 182)
+      .fill(br, bgc, bb, 240)
       .stroke({
-        width: tw(matched ? 2.6 : 1.7),
-        color: matched ? [255, 255, 255, 255] : [235, 242, 255, 195],
+        width: tw(isOverdrive ? 2.7 : 2.4),
+        color: isOverdrive ? [255, 238, 120, 255] : [255, 255, 255, 248],
       });
   }
 
@@ -413,33 +411,5 @@ export function renderMacroWorldPass(
   }
   if (hasTraps) {
     shapes.traps.fill(255, 45, 95, 236).stroke({ width: tw(2.1), color: [255, 215, 225, 255] });
-  }
-
-  // 6. Frequency Diving Nodes (Portals) — colored by nearest upcoming portal
-  let nearestPortalColor: [number, number, number] | null = null;
-  let hasPortals = false;
-  for (const node of divingNodes) {
-    if (node.activated) continue;
-    const sx = tx(node.worldX - cameraX);
-    if (sx < -cullPad || sx > width + cullPad) continue;
-    const sy = ty(node.worldY);
-    const rad = ts(node.radius);
-    if (!nearestPortalColor) {
-      nearestPortalColor = FORM_CONFIG[node.targetForm].rgb;
-    }
-
-    shapes.portals
-      .appendCircle(sx, sy, rad, rad)
-      .appendCircle(sx, sy, rad * 0.58, rad * 0.58);
-    hasPortals = true;
-  }
-  if (hasPortals && nearestPortalColor) {
-    shapes.portals
-      .fillRule(shapes.evenOddRule)
-      .fill(nearestPortalColor[0], nearestPortalColor[1], nearestPortalColor[2], 75)
-      .stroke({
-        width: tw(3.5),
-        color: [nearestPortalColor[0], nearestPortalColor[1], nearestPortalColor[2], 255],
-      });
   }
 }

@@ -3,7 +3,6 @@ import type {
   BeatTrap,
   BezierSegment,
   DashRing,
-  DivingNode,
   FrequencyBands,
   HoldRail,
   JumpPad,
@@ -20,7 +19,6 @@ const FORMS_ORDER: ResonanceFormType[] = ['bass', 'synth', 'treble'];
 export type RuntimeTrap = BeatTrap & { screenFloorY?: number; baseDroneY?: number };
 
 type RuntimeOrb = ResonanceOrb & { baseY: number; baseX: number };
-type RuntimePortal = DivingNode & { baseY: number };
 type RuntimeSkyPlatform = SkyPlatform & { baseY: number };
 type RuntimeJumpPad = JumpPad & { baseY: number };
 type RuntimeDashRing = DashRing & { baseY: number };
@@ -85,9 +83,6 @@ export class BezierTerrain {
   private allTraps: RuntimeTrap[] = [];
   private readonly visibleTraps: RuntimeTrap[] = [];
 
-  private allDivingNodes: RuntimePortal[] = [];
-  private readonly visibleDivingNodes: DivingNode[] = [];
-
   private allSkyPlatforms: RuntimeSkyPlatform[] = [];
   private maxSkySpan: number = 0;
   private readonly visibleSkyPlatforms: SkyPlatform[] = [];
@@ -150,15 +145,6 @@ export class BezierTerrain {
           t.isAerialDrone && t.droneWorldY !== undefined
             ? t.droneWorldY * scaleY
             : ((t as RuntimeTrap).screenFloorY ?? this.refHeight * 0.7) * scaleY,
-      }))
-      .sort((a, b) => a.worldX - b.worldX);
-
-    this.allDivingNodes = blueprint.divingNodes
-      .map((n) => ({
-        ...n,
-        baseY: n.worldY,
-        worldY: n.worldY * scaleY,
-        activated: false,
       }))
       .sort((a, b) => a.worldX - b.worldX);
 
@@ -242,11 +228,6 @@ export class BezierTerrain {
         if (trap.isAerialDrone && trap.baseDroneY !== undefined) {
           trap.screenFloorY = trap.baseDroneY * scaleY;
         }
-      }
-      for (let i = 0; i < this.allDivingNodes.length; i++) {
-        const node = this.allDivingNodes[i]!;
-        node.activated = false;
-        node.worldY = node.baseY * scaleY;
       }
       for (let i = 0; i < this.allSkyPlatforms.length; i++) {
         const plat = this.allSkyPlatforms[i]!;
@@ -394,21 +375,7 @@ export class BezierTerrain {
       this.visibleTraps.push(trap);
     }
 
-    // 4. Visible Frequency Diving Portals — O(log N + K)
-    this.visibleDivingNodes.length = 0;
-    for (
-      let i = lowerBoundWorldX(this.allDivingNodes, minX);
-      i < this.allDivingNodes.length;
-      i++
-    ) {
-      const node = this.allDivingNodes[i]!;
-      if (node.worldX > maxX) break;
-      if (node.activated) continue;
-      node.worldY = node.baseY * scaleY;
-      this.visibleDivingNodes.push(node);
-    }
-
-    // 5. Visible 2F Sky Platforms — O(log N + K)
+    // 4. Visible 2F Sky Platforms — O(log N + K)
     this.visibleSkyPlatforms.length = 0;
     for (
       let i = lowerBoundSpanX0(this.allSkyPlatforms, minX - this.maxSkySpan);
@@ -529,10 +496,6 @@ export class BezierTerrain {
 
   public getTraps(): RuntimeTrap[] {
     return this.visibleTraps;
-  }
-
-  public getDivingNodes(): DivingNode[] {
-    return this.visibleDivingNodes;
   }
 
   public getSkyPlatforms(): SkyPlatform[] {

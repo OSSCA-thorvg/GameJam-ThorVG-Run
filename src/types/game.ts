@@ -18,8 +18,6 @@ export type JudgmentGrade = 'PERFECT' | 'GREAT' | 'GOOD' | 'MISS';
 
 export type ResultRank = 'S' | 'A' | 'B' | 'C';
 
-export type GamePhase = 'MACRO' | 'ZOOM_IN' | 'MICRO' | 'ZOOM_OUT';
-
 export type SectionIntensity = 'calm' | 'groove' | 'drop';
 
 export type LoadingStageKey = keyof Messages['loading']['stages'];
@@ -221,7 +219,6 @@ export interface TrackBlueprint {
   segments: BezierSegment[];
   orbs: ResonanceOrb[];
   traps: BeatTrap[];
-  divingNodes: DivingNode[];
   skyPlatforms: SkyPlatform[];
   jumpPads: JumpPad[];
   dashRings: DashRing[];
@@ -248,23 +245,6 @@ export interface BeatTrap {
   /** True when floating mid-air as a BeatDrone hazard (damages on contact unless shattered via Shift Dash/Skill or Overdrive). */
   isAerialDrone?: boolean;
   droneWorldY?: number;
-}
-
-export interface DivingNode {
-  id: number;
-  worldX: number;
-  worldY: number;
-  radius: number;
-  targetForm: ResonanceFormType;
-  activated: boolean;
-}
-
-export interface MicroGate {
-  id: number;
-  worldX: number;
-  safePolarity: 1 | -1; // -1 = top lane, +1 = bottom lane
-  passed: boolean;
-  hit: boolean;
 }
 
 export interface VectorParticle {
@@ -308,23 +288,17 @@ export interface RenderFrameState {
   overdriveRatio?: number;
   shakeX?: number;
   shakeY?: number;
-  phase: GamePhase;
-  zoomScale: number;          // 1.0x -> 50.0x (with Origin Rebasing)
-  rebasedZoomDisplay: number; // Effective HUD display scale (e.g. 1.0x ~ 64.0x)
+  zoomScale: number;
   cameraX: number;
   focalScreenX: number;
   focalScreenY: number;
   panX?: number; // Unzoomed world/screen horizontal pan offset (px, default 0)
   panY?: number; // Unzoomed world/screen vertical pan offset (px, default 0)
   activeForm: ResonanceFormType;
-  divingTargetForm: ResonanceFormType;
   resonanceGauge: number;     // 0 ~ 100
   frequency: FrequencyBands;
   segments: BezierSegment[];
   traps: BeatTrap[];
-  divingNodes: DivingNode[];
-  microGates: MicroGate[];
-  microPolarity: 1 | -1;
   playerScreenX: number;
   playerScreenY: number;
   playerRotation: number;
@@ -352,7 +326,6 @@ export interface HUDTelemetry {
   difficulty?: DifficultyMode;
   sfxMode?: SfxMode;
   fps: number;
-  phase: GamePhase;
   zoomDisplay: number;
   score: number;
   combo: number;
@@ -360,14 +333,15 @@ export interface HUDTelemetry {
   progress: number; // 0.0 ~ 1.0
   activeForm: ResonanceFormType;
   resonanceGauge: number; // 0 ~ 100
-  microSyncProgress?: number; // 0 ~ 100 during MICRO tunnel
   overdriveReady?: boolean;
   overdriveActive?: boolean;
-  acousticFilter: AcousticZoomMode;
+  /** 0 = [Shift] skill ready, 0 < ratio <= 1 = remaining cooldown fraction */
+  skillCooldownRatio?: number;
+  /** Remaining [Shift] skill cooldown in seconds (rounded to 0.1s; 0 when ready) */
+  skillCooldownSec?: number;
   statusBanner: BannerMessage | null;
   isFinished: boolean;
   trapsDestroyed: number;
-  divesCompleted: number;
   surfMomentum?: number; // 0.0 ~ 1.0
   speedMultiplier?: number; // 1.0 ~ 2.4
   orbsCollected?: number;
@@ -386,9 +360,6 @@ export interface HUDTelemetry {
   userZoom?: number; // User zoom multiplier (0.4~4.0 live, 0.20~20.0 paused)
   isPanned?: boolean; // True when panX !== 0 || panY !== 0 || userZoom !== 1
 }
-
-/** Acoustic Zoom filter state. 'macro' = full spectrum, otherwise the isolated band. */
-export type AcousticZoomMode = 'macro' | ResonanceFormType;
 
 /**
  * Language-agnostic status banner emitted by the engine.

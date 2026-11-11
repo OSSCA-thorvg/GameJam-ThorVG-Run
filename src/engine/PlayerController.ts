@@ -19,8 +19,8 @@ export const FORM_PROFILES: Record<ResonanceFormType, FormPhysicsProfile> = {
     form: 'bass',
     gravity: 2150,
     jumpVelocity: -700,
-    secondJumpVelocity: -600,
-    maxJumps: 1,
+    secondJumpVelocity: -630,
+    maxJumps: 2,
     dashDurationSec: 0.2,
     dashCooldownSec: 0.48,
     dashSpeedMultiplier: 1.55,
@@ -34,9 +34,9 @@ export const FORM_PROFILES: Record<ResonanceFormType, FormPhysicsProfile> = {
     jumpVelocity: -710,
     secondJumpVelocity: -650,
     maxJumps: 2,
-    dashDurationSec: 0.24,
+    dashDurationSec: 0.26,
     dashCooldownSec: 0.55,
-    dashSpeedMultiplier: 1.8,
+    dashSpeedMultiplier: 1.95,
     shockwaveRangePx: 0,
     slopeGrindMultiplier: 1.42,
     piercesTrapsDuringDash: false,
@@ -46,7 +46,7 @@ export const FORM_PROFILES: Record<ResonanceFormType, FormPhysicsProfile> = {
     gravity: 1920,
     jumpVelocity: -720,
     secondJumpVelocity: -640,
-    maxJumps: 1,
+    maxJumps: 2,
     dashDurationSec: 0.3,
     dashCooldownSec: 0.5,
     dashSpeedMultiplier: 2.55,
@@ -57,10 +57,10 @@ export const FORM_PROFILES: Record<ResonanceFormType, FormPhysicsProfile> = {
 };
 
 /**
- * Manages Skul-style Resonance Form Swap state, physics profiles, and form-specific skills:
- * - Bass Form (20~250Hz, Neon Red): Hexagonal Armor + Landing/Ground Shockwave destroying traps
- * - Synth Form (250Hz~4kHz, Cyan Blue): Streamlined Diamond + Double Jump & Bezier Slope Grind
- * - Treble Form (4kHz~20kHz, Electric Yellow): Sharp Arrowhead + Zero-G Invulnerable Blink Dash
+ * Manages Crewmate Playstyle physics profiles and signature skills (universal Double Jump across all 3 styles):
+ * - Bass Breaker (`bass`, Neon Red): Hexagonal Heavy Slammer + Meteor Air Slam & Ground Shockwave
+ * - Synth Magnet (`synth`, Cyan Blue): Streamlined Omni-Magnet Glider + Zero-G Magnetic Glide & Slope/Rail Boost
+ * - Treble Blink (`treble`, Electric Yellow): Arrowhead Phase Speedster + Zero-G Invulnerable Blink Dash
  */
 export class PlayerController {
   private currentForm: ResonanceFormType = 'synth';
@@ -79,18 +79,6 @@ export class PlayerController {
 
   public reset(initialForm: ResonanceFormType = 'synth'): void {
     this.currentForm = initialForm;
-  }
-
-  public swapForm(nextForm: ResonanceFormType): FormPhysicsProfile {
-    this.currentForm = nextForm;
-    return this.profile;
-  }
-
-  public cycleForm(): ResonanceFormType {
-    const order: ResonanceFormType[] = ['bass', 'synth', 'treble'];
-    const idx = order.indexOf(this.currentForm);
-    this.currentForm = order[(idx + 1) % order.length]!;
-    return this.currentForm;
   }
 }
 

@@ -7,11 +7,9 @@ import {
   type BannerMessage,
   type DifficultyMode,
   type FrequencyBands,
-  type GamePhase,
   type HUDTelemetry,
   type JudgmentGrade,
   type LoadingProgress,
-  type MicroGate,
   type RendererMode,
   type ResonanceFormType,
   type ResonanceOrb,
@@ -28,7 +26,6 @@ import { VfxPoolSystem } from './systems/VfxPoolSystem';
 
 export const PLAYER_HIT_X_RATIO = 0.24;
 const OVERDRIVE_DURATION_SEC = 8.0;
-const ZOOM_THRESHOLD = 50.0;
 const HUD_PUBLISH_INTERVAL_SEC = 0.05; // 20Hz steady telemetry + 0ms instant flush on discrete dirty events
 const LIVE_MIN_ZOOM = 0.4;
 const LIVE_MAX_ZOOM = 4.0;
@@ -72,14 +69,6 @@ export class GameEngine {
   private hudPublishAccum: number = 0;
   private hudDirty: boolean = true;
 
-  // Phase & Infinite Zoom State (Origin Rebasing)
-  private phase: GamePhase = 'MACRO';
-  private zoomScale: number = 1.0;
-  private rebasedZoomDisplay: number = 1.0;
-  private transitionTimer: number = 0;
-  private focalScreenX: number = 640;
-  private focalScreenY: number = 360;
-
   // World & Runner Physics State
   private cameraX: number = 0;
   private baseSpeed: number = WORLD_PX_PER_SEC;
@@ -112,17 +101,12 @@ export class GameEngine {
   private shakeDuration: number = 0.2;
   private shakeIntensity: number = 0;
 
-  // Resonance Swap, Manual Overdrive & Micro View State
+  // Crewmate Playstyle & Resonance Overdrive State
+  private playstyle: ResonanceFormType = 'synth';
   private activeForm: ResonanceFormType = 'synth';
-  private divingTargetForm: ResonanceFormType = 'bass';
   private resonanceGauge: number = 35;
-  private microSyncProgress: number = 0;
   private overdriveTimer: number = 0;
   private overdriveNotifiedReady: boolean = false;
-  private microPolarity: 1 | -1 = -1;
-  private microGates: MicroGate[] = [];
-  private nextMicroGateX: number = 0;
-  private nextMicroGateId: number = 1;
 
   // Status Banner State
   private statusBanner: BannerMessage | null = null;
@@ -182,6 +166,19 @@ export class GameEngine {
     return this.difficulty;
   }
 
+  public setPlaystyle(style: ResonanceFormType): void {
+    this.playstyle = style;
+    if (!this.running) {
+      this.playerController.reset(style);
+      this.activeForm = style;
+    }
+    this.hudDirty = true;
+  }
+
+  public getPlaystyle(): ResonanceFormType {
+    return this.playstyle;
+  }
+
   public setSfxMode(mode: SfxMode): void {
     this.audio.setSfxMode(mode);
     this.hudDirty = true;
@@ -208,7 +205,6 @@ export class GameEngine {
     if (
       !this.running ||
       this.paused ||
-      this.phase !== 'MACRO' ||
       this.overdriveTimer > 0 ||
       this.resonanceGauge < 100
     ) {
@@ -274,9 +270,13 @@ export class GameEngine {
   public async startRun(
     track: TrackMetadata,
     onProgress?: (status: LoadingProgress) => void,
-    difficulty: DifficultyMode = this.difficulty
+    difficulty: DifficultyMode = this.difficulty,
+    playstyle?: ResonanceFormType
   ): Promise<void> {
     this.difficulty = difficulty;
+    if (playstyle) {
+      this.playstyle = playstyle;
+    }
     if (
       !this.activeBlueprint ||
       this.activeBlueprint.trackId !== track.id ||
@@ -337,7 +337,7 @@ export class GameEngine {
         : this.currentSectionIntensity === 'drop'
           ? 0.044
           : 0.028;
-    return this.phase === 'MACRO' ? 1.0 + this.beatPulse * punchScale : this.zoomScale;
+    return 1.0 + this.beatPulse * punchScale;
   }
 
   private getEffectiveZoomScale(): number {
@@ -345,11 +345,7 @@ export class GameEngine {
   }
 
   private getLiveFocalPoint(): { fx: number; fy: number } {
-    const playerScreenX = this.getPlayerScreenX();
-    if (this.phase === 'MACRO' || this.phase === 'MICRO') {
-      return { fx: playerScreenX, fy: this.playerY };
-    }
-    return { fx: this.focalScreenX, fy: this.focalScreenY };
+    return { fx: this.getPlayerScreenX(), fy: this.playerY };
   }
 
   private getEffectiveFocalPoint(): { fx: number; fy: number } {
@@ -516,7 +512,7 @@ export class GameEngine {
         const { fx: fx0, fy: fy0 } = this.getLiveFocalPoint();
         const blend = clamped <= 1 ? 0 : Math.min(1, (clamped - 1) / 3);
         const uSubj = fx0;
-        const vSubj = fy0 + (this.phase === 'MACRO' ? this.playerRadius * 0.65 * blend : 0);
+        const vSubj = fy0 + this.playerRadius * 0.65 * blend;
         const targetSx = fx0 + (cx - fx0) * blend;
         const targetSy = fy0 + (Math.max(fy0, this.height * 0.73) - fy0) * blend;
         this.panX = uSubj - cx - (targetSx - cx) / z2;
@@ -632,10 +628,6 @@ export class GameEngine {
     this.finishRecorded = false;
     this.lastIsNewRecord = false;
     this.lastScoreDelta = 0;
-    this.phase = 'MACRO';
-    this.zoomScale = 1.0;
-    this.rebasedZoomDisplay = 1.0;
-    this.transitionTimer = 0;
     this.hitXRatio = PLAYER_HIT_X_RATIO;
     this.baseSpeed =
       this.activeBlueprint?.worldPxPerSec ?? DIFFICULTY_CONFIG[this.difficulty].worldPxPerSec;
@@ -650,12 +642,15 @@ export class GameEngine {
       this.terrain.reset(this.width, this.height);
     }
 
+    this.playerController.reset(this.playstyle);
+    this.activeForm = this.playstyle;
+
     const { floorY } = this.terrain.sampleFloor(0);
     this.playerY = floorY - this.playerRadius;
     this.playerVy = 0;
     this.playerRotation = 0;
     this.isGrounded = true;
-    this.jumpsRemaining = 2;
+    this.jumpsRemaining = this.playerController.profile.maxJumps;
     this.dashTimer = 0;
     this.strikeTimer = 0;
     this.airBoostTimer = 0;
@@ -675,15 +670,9 @@ export class GameEngine {
     this.shakeTimer = 0;
     this.shakeIntensity = 0;
 
-    this.playerController.reset('synth');
-    this.activeForm = this.playerController.form;
-    this.divingTargetForm = 'bass';
     this.resonanceGauge = 40;
-    this.microSyncProgress = 0;
     this.overdriveTimer = 0;
     this.overdriveNotifiedReady = false;
-    this.microPolarity = -1;
-    this.microGates = [];
 
     this.scoreJudge.reset();
     this.vfx.reset();
@@ -703,9 +692,6 @@ export class GameEngine {
       this.isDiveHeld = false;
       return;
     }
-    if (held && this.phase === 'MICRO' && !this.isDiveHeld) {
-      this.handlePrimaryAction();
-    }
     this.isDiveHeld = held;
   }
 
@@ -716,9 +702,7 @@ export class GameEngine {
     if (prev < 100 && this.resonanceGauge >= 100 && !this.overdriveNotifiedReady) {
       this.overdriveNotifiedReady = true;
       this.hudDirty = true;
-      if (this.phase === 'MACRO') {
-        this.setBanner({ key: 'overdriveReady' }, 1.9);
-      }
+      this.setBanner({ key: 'overdriveReady' }, 1.9);
     }
   }
 
@@ -745,19 +729,21 @@ export class GameEngine {
       signedDeltaMs
     );
 
+    const gaugeMult = this.activeForm === 'synth' ? 1.2 : 1.0;
+
     if (grade === 'PERFECT') {
       this.beatPulse = 1.0;
       this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.1);
-      if (!suppressGaugeGain) this.addResonanceGauge(4);
+      if (!suppressGaugeGain) this.addResonanceGauge(5.5 * gaugeMult);
       this.vfx.spawnShockwave(screenX, screenY, 14, 92, [255, 230, 0], 0.95);
       this.vfx.spawnBurst(screenX, screenY, [255, 230, 0], 12);
     } else if (grade === 'GREAT') {
       this.beatPulse = Math.max(this.beatPulse, 0.55);
       this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.06);
-      if (!suppressGaugeGain) this.addResonanceGauge(2.5);
+      if (!suppressGaugeGain) this.addResonanceGauge(3.5 * gaugeMult);
       this.vfx.spawnBurst(screenX, screenY, [5, 213, 255], 8);
     } else if (grade === 'GOOD') {
-      if (!suppressGaugeGain) this.addResonanceGauge(1.2);
+      if (!suppressGaugeGain) this.addResonanceGauge(1.8 * gaugeMult);
     } else if (grade === 'MISS') {
       this.surfMomentum = Math.max(0.15, this.surfMomentum * 0.5);
     }
@@ -797,14 +783,11 @@ export class GameEngine {
     const rawSignedMs = Math.round((audioSec - targetSec) * 1000);
     const deltaMs = Math.abs(rawSignedMs);
     const grade = this.scoreJudge.classifyDeltaMs(deltaMs, this.difficulty);
-    const isBandMatch = this.overdriveTimer > 0 || this.activeForm === orb.band;
-    if (isBandMatch) {
-      this.addResonanceGauge(2.5);
-    }
-    this.audio.sfx.playNoteHit(orb.band, grade, isBandMatch);
-    const basePts = (orb.isBeatTarget ? 250 : 170) * (isBandMatch ? 1.5 : 1.0);
-    this.emitJudgment(grade, playerScreenX, oy, deltaMs, Math.round(basePts), rawSignedMs);
-    if (isBandMatch) {
+    const isResonantHit = grade === 'PERFECT' || this.overdriveTimer > 0;
+    this.audio.sfx.playNoteHit(orb.band, grade, isResonantHit);
+    const basePts = orb.isBeatTarget ? 320 : 220;
+    this.emitJudgment(grade, playerScreenX, oy, deltaMs, basePts, rawSignedMs);
+    if (isResonantHit) {
       this.vfx.spawnBurst(playerScreenX, oy, FORM_CONFIG[orb.band].rgb, 7);
     }
   }
@@ -859,23 +842,6 @@ export class GameEngine {
     const playerScreenX = this.getPlayerScreenX();
     const playerWorldX = this.cameraX + playerScreenX;
 
-    if (this.phase === 'MICRO') {
-      this.microPolarity = this.microPolarity === -1 ? 1 : -1;
-      const targetLaneY =
-        this.microPolarity === -1 ? this.height * 0.34 : this.height * 0.66;
-      this.playerY = targetLaneY;
-      this.vfx.spawnBurst(
-        playerScreenX,
-        this.playerY,
-        FORM_CONFIG[this.divingTargetForm].rgb,
-        10
-      );
-      this.scoreJudge.addRawScore(35 * this.scoreJudge.combo);
-      return;
-    }
-
-    if (this.phase !== 'MACRO') return;
-
     this.judgeNearbyBeatTargetOnInput(playerScreenX, playerWorldX);
 
     // If activateDashRing just triggered an air boost, don't overwrite its horizontal trajectory
@@ -887,6 +853,7 @@ export class GameEngine {
       this.playerVy = isSecondJump ? profile.secondJumpVelocity : profile.jumpVelocity;
       this.isGrounded = false;
       this.isGrinding = false;
+      this.slamActive = false;
       this.jumpsRemaining = Math.max(
         0,
         (isSecondJump ? this.jumpsRemaining : profile.maxJumps) - 1
@@ -901,32 +868,8 @@ export class GameEngine {
     }
   }
 
-  public handleFormSwap(targetForm?: ResonanceFormType): void {
-    if (!this.running || this.paused) return;
-    const nextForm = targetForm ?? this.playerController.cycleForm();
-    this.playerController.swapForm(nextForm);
-    this.activeForm = nextForm;
-    const maxJumps = this.playerController.profile.maxJumps;
-    if (this.isGrounded) {
-      this.jumpsRemaining = maxJumps;
-    } else {
-      this.jumpsRemaining = Math.min(this.jumpsRemaining, maxJumps);
-    }
-    this.hudDirty = true;
-    const playerScreenX = this.getPlayerScreenX();
-    this.vfx.spawnBurst(playerScreenX, this.playerY, FORM_CONFIG[nextForm].rgb, 18);
-    this.setBanner({ key: 'manualSwap', params: { form: nextForm } }, 1.6);
-  }
-
   public handleSecondaryAction(): void {
-    if (!this.running || this.paused) return;
-
-    if (this.phase === 'MICRO') {
-      this.handlePrimaryAction();
-      return;
-    }
-
-    if (this.phase !== 'MACRO' || this.dashCooldown > 0) return;
+    if (!this.running || this.paused || this.dashCooldown > 0) return;
 
     const profile = this.playerController.profile;
     const playerScreenX = this.getPlayerScreenX();
@@ -940,8 +883,10 @@ export class GameEngine {
         this.playerVy = 1320;
         this.slamActive = true;
         this.dashCooldown = profile.dashCooldownSec;
+        this.hudDirty = true;
       } else {
         this.dashCooldown = profile.dashCooldownSec;
+        this.hudDirty = true;
         this.triggerBassShockwave(playerScreenX, this.playerY, playerWorldX);
       }
       return;
@@ -949,12 +894,16 @@ export class GameEngine {
 
     this.dashTimer = profile.dashDurationSec;
     this.dashCooldown = profile.dashCooldownSec;
+    this.hudDirty = true;
     this.playerVy = 0;
     this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.25);
 
     if (profile.piercesTrapsDuringDash) {
-      this.invulnerableTimer = Math.max(this.invulnerableTimer, profile.dashDurationSec + 0.1);
+      this.invulnerableTimer = Math.max(this.invulnerableTimer, profile.dashDurationSec + 0.12);
       this.setBanner({ key: 'blinkDash' }, 0.9);
+    } else if (this.activeForm === 'synth') {
+      this.vfx.spawnShockwave(playerScreenX, this.playerY, 18, 210, FORM_CONFIG.synth.rgb, 0.9);
+      this.setBanner({ key: 'magneticPulse' }, 0.9);
     }
   }
 
@@ -969,6 +918,7 @@ export class GameEngine {
     this.playerY = ry;
     this.playerVy = 0;
     this.isGrounded = false;
+    this.slamActive = false;
     this.airBoostTimer = 0.3;
     this.strikeTimer = 0.32;
     this.invulnerableTimer = Math.max(this.invulnerableTimer, 0.36);
@@ -1021,7 +971,13 @@ export class GameEngine {
     }
     this.scoreJudge.tick(dt);
 
-    if (this.dashCooldown > 0) this.dashCooldown = Math.max(0, this.dashCooldown - dt);
+    if (this.dashCooldown > 0) {
+      const prevCooldown = this.dashCooldown;
+      this.dashCooldown = Math.max(0, this.dashCooldown - dt);
+      if (prevCooldown > 0 && this.dashCooldown === 0) {
+        this.hudDirty = true;
+      }
+    }
     if (this.strikeTimer > 0) this.strikeTimer = Math.max(0, this.strikeTimer - dt);
     if (this.invulnerableTimer > 0) {
       this.invulnerableTimer = Math.max(0, this.invulnerableTimer - dt);
@@ -1049,15 +1005,14 @@ export class GameEngine {
 
     // Forward hit-line surge during OVERDRIVE (0.30W) and DROP (0.265W), keeping 0.0ms beat sync!
     const targetHitRatio =
-      this.phase === 'MACRO'
-        ? this.overdriveTimer > 0
-          ? 0.3
-          : this.currentSectionIntensity === 'drop'
-            ? 0.265
-            : PLAYER_HIT_X_RATIO
-        : PLAYER_HIT_X_RATIO;
+      this.overdriveTimer > 0
+        ? 0.3
+        : this.currentSectionIntensity === 'drop'
+          ? 0.265
+          : PLAYER_HIT_X_RATIO;
     this.hitXRatio += (targetHitRatio - this.hitXRatio) * Math.min(1, dt * 4.5);
 
+    const profile = this.playerController.profile;
     let speedMultiplier = 1.0 + this.surfMomentum * 0.65 + freq.overall * 0.15;
     if (this.overdriveTimer > 0) {
       speedMultiplier += 0.35;
@@ -1067,9 +1022,11 @@ export class GameEngine {
       speedMultiplier = 2.35;
     } else if (this.dashTimer > 0) {
       this.dashTimer = Math.max(0, this.dashTimer - dt);
-      speedMultiplier = this.activeForm === 'treble' ? 2.4 : 1.95;
+      speedMultiplier = profile.dashSpeedMultiplier;
     } else if (this.isGrinding) {
-      speedMultiplier += 0.35;
+      speedMultiplier += 0.35 + (profile.slopeGrindMultiplier - 1.0) * 0.65;
+    } else if (this.isGrounded && this.playerRotation > 0.04) {
+      speedMultiplier += Math.min(0.22, this.playerRotation * 0.45) * profile.slopeGrindMultiplier;
     }
     this.lastSpeedMultiplier = speedMultiplier;
 
@@ -1090,7 +1047,7 @@ export class GameEngine {
     }
     const stepX = Math.max(0, this.cameraX - prevCameraX);
 
-    if ((this.phase === 'MACRO' && (this.isGrounded || this.isGrinding)) || this.phase === 'MICRO') {
+    if (this.isGrounded || this.isGrinding) {
       this.runCycleTime += dt * speedMultiplier * 1.12;
     }
 
@@ -1105,15 +1062,7 @@ export class GameEngine {
       this.computeViewWorldBounds(true)
     );
 
-    if (this.phase === 'MACRO') {
-      this.updateMacroPhase(dt, playerScreenX, playerWorldX, audioSec, speedMultiplier);
-    } else if (this.phase === 'ZOOM_IN') {
-      this.updateZoomInTransition(dt, playerScreenX);
-    } else if (this.phase === 'MICRO') {
-      this.updateMicroPhase(dt, playerScreenX, playerWorldX);
-    } else if (this.phase === 'ZOOM_OUT') {
-      this.updateZoomOutTransition(dt, playerScreenX, playerWorldX);
-    }
+    this.updateMacroPhase(dt, playerScreenX, playerWorldX, audioSec, speedMultiplier);
 
     this.vfx.update(dt, stepX);
 
@@ -1181,16 +1130,13 @@ export class GameEngine {
       overdriveRatio: this.overdriveTimer / OVERDRIVE_DURATION_SEC,
       shakeX,
       shakeY,
-      phase: this.phase,
       zoomScale: effectiveZoomScale,
-      rebasedZoomDisplay: this.rebasedZoomDisplay * this.userZoom,
       cameraX: this.cameraX,
       focalScreenX: effectiveFocalX,
       focalScreenY: effectiveFocalY,
       panX: this.panX,
       panY: this.panY,
       activeForm: this.activeForm,
-      divingTargetForm: this.divingTargetForm,
       resonanceGauge: this.resonanceGauge,
       frequency: freq,
       segments: this.terrain.getSegments(),
@@ -1200,9 +1146,6 @@ export class GameEngine {
       dashRings: this.terrain.getDashRings(),
       holdRails: this.terrain.getHoldRails(),
       traps: this.terrain.getTraps(),
-      divingNodes: this.terrain.getDivingNodes(),
-      microGates: this.microGates,
-      microPolarity: this.microPolarity,
       playerScreenX,
       playerScreenY: this.playerY,
       playerRotation: this.playerRotation,
@@ -1226,7 +1169,12 @@ export class GameEngine {
     isFinished: boolean
   ): void {
     const { accuracy, rank } = this.scoreJudge.computeAccuracyAndRank();
-    const effectiveDisplayZoom = this.rebasedZoomDisplay * this.userZoom;
+    const profile = this.playerController.profile;
+    const skillCooldownRatio =
+      profile.dashCooldownSec > 0
+        ? Math.min(1, Math.max(0, this.dashCooldown / profile.dashCooldownSec))
+        : 0;
+    const skillCooldownSec = Number(Math.max(0, this.dashCooldown).toFixed(1));
     const neutralPan = this.paused ? this.getClampedNeutralPausedPan() : { panX: 0, panY: 0 };
     const isPanned =
       Math.abs(this.panX - neutralPan.panX) > 1 ||
@@ -1238,23 +1186,20 @@ export class GameEngine {
       difficulty: this.difficulty,
       sfxMode: this.audio.getSfxMode(),
       fps: this.currentFps,
-      phase: this.phase,
-      zoomDisplay: Number(effectiveDisplayZoom.toFixed(2)),
+      zoomDisplay: Number(this.getEffectiveZoomScale().toFixed(2)),
       score: Math.floor(this.scoreJudge.score),
       combo: this.scoreJudge.combo,
       maxCombo: this.scoreJudge.maxCombo,
       progress,
       activeForm: this.activeForm,
       resonanceGauge: Math.min(100, Math.max(0, Math.round(this.resonanceGauge))),
-      microSyncProgress: Math.min(100, Math.max(0, Math.round(this.microSyncProgress))),
-      overdriveReady:
-        this.phase === 'MACRO' && this.overdriveTimer <= 0 && this.resonanceGauge >= 100,
+      overdriveReady: this.overdriveTimer <= 0 && this.resonanceGauge >= 100,
       overdriveActive: this.overdriveTimer > 0,
-      acousticFilter: this.audio.getAcousticZoomMode(),
+      skillCooldownRatio,
+      skillCooldownSec,
       statusBanner: this.statusBanner,
       isFinished,
       trapsDestroyed: this.scoreJudge.trapsDestroyed,
-      divesCompleted: this.scoreJudge.divesCompleted + this.scoreJudge.gimmicksTriggered,
       surfMomentum: Number(this.surfMomentum.toFixed(2)),
       speedMultiplier: Number(speedMultiplier.toFixed(1)),
       orbsCollected: this.scoreJudge.orbsCollected,
@@ -1317,19 +1262,20 @@ export class GameEngine {
           ridingRail = true;
           this.isGrounded = true;
           this.isGrinding = true;
+          this.slamActive = false;
           this.playerY += (railY - this.playerY) * Math.min(1, dt * 28);
           this.playerVy = 0;
           this.playerRotation = 0;
-          this.jumpsRemaining = this.activeForm === 'synth' ? 2 : 1;
+          this.jumpsRemaining = this.playerController.profile.maxJumps;
 
           // Emit continuous rail sparks & combo ticks every 0.10s
           this.holdTickAccum += dt;
           if (this.holdTickAccum >= 0.1) {
             this.holdTickAccum -= 0.1;
-            const bandRailMult =
-              this.overdriveTimer > 0 || this.activeForm === rail.band ? 1.5 : 1.0;
-            this.scoreJudge.addHoldRailTick(bandRailMult * this.getActiveScoreMultiplier());
-            this.addResonanceGauge(bandRailMult > 1 ? 1.2 : 0.6);
+            const railMult =
+              this.overdriveTimer > 0 || this.activeForm === 'synth' ? 1.55 : 1.35;
+            this.scoreJudge.addHoldRailTick(railMult * this.getActiveScoreMultiplier());
+            this.addResonanceGauge(this.activeForm === 'synth' ? 1.32 : 1.1);
             this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.04);
             this.vfx.spawnParticle(
               playerScreenX - 10,
@@ -1347,11 +1293,7 @@ export class GameEngine {
             rail.completed = true;
             this.scoreJudge.recordGimmickTriggered();
             this.scoreJudge.recordOrbCollected();
-            this.audio.sfx.playNoteHit(
-              rail.band,
-              'PERFECT',
-              this.overdriveTimer > 0 || this.activeForm === rail.band
-            );
+            this.audio.sfx.playNoteHit(rail.band, 'PERFECT', true);
             this.emitJudgment('PERFECT', playerScreenX, railY, 0, 320, 0);
             this.setBanner({ key: 'beatBounce' }, 1.1);
           }
@@ -1367,7 +1309,7 @@ export class GameEngine {
     const prevBottomY = this.playerY + this.playerRadius;
 
     if (!ridingRail) {
-      if (this.airBoostTimer > 0 || (this.dashTimer > 0 && this.activeForm === 'treble')) {
+      if (this.airBoostTimer > 0 || this.dashTimer > 0) {
         this.playerVy = 0;
         this.playerRotation = 0;
         this.vfx.spawnAfterimage(playerScreenX, this.playerY, 0, this.activeForm, 0.82);
@@ -1395,13 +1337,18 @@ export class GameEngine {
         this.jumpsRemaining = this.playerController.profile.maxJumps;
         this.playerRotation = 0;
         if (wasAir) {
-          if (this.overdriveTimer > 0 || this.activeForm === skyPlat.band) {
-            // 3-Color Band Passive Synergy: instant Dash/Skill refresh on matching SkyPlatform!
+          if (this.dashCooldown > 0) {
             this.dashCooldown = 0;
-            this.addResonanceGauge(3);
+            this.hudDirty = true;
           }
+          this.addResonanceGauge(3);
           this.vfx.spawnBurst(playerScreenX, platY, FORM_CONFIG[skyPlat.band].secondaryRgb, 8);
+          if (this.activeForm === 'bass' && this.slamActive) {
+            this.slamActive = false;
+            this.triggerBassShockwave(playerScreenX, this.playerY, playerWorldX);
+          }
         }
+        this.slamActive = false;
       } else if (!isGap) {
         // 2B. Solid 1F Ground Sprint Road
         const targetGroundY = floorY - this.playerRadius;
@@ -1410,7 +1357,7 @@ export class GameEngine {
           this.playerY = targetGroundY;
           this.playerVy = 0;
           this.isGrounded = true;
-          this.jumpsRemaining = this.activeForm === 'synth' ? 2 : 1;
+          this.jumpsRemaining = this.playerController.profile.maxJumps;
           this.playerRotation = angleRad;
 
           // Subtle sprint dust sparks while running fast
@@ -1431,6 +1378,7 @@ export class GameEngine {
             this.slamActive = false;
             this.triggerBassShockwave(playerScreenX, this.playerY, playerWorldX);
           }
+          this.slamActive = false;
         } else {
           this.isGrounded = false;
           this.playerRotation = Math.max(-0.55, Math.min(0.65, (this.playerVy / 950) * 0.48));
@@ -1445,6 +1393,7 @@ export class GameEngine {
           this.playerY = floorY - this.playerRadius - 14;
           this.playerVy = -680;
           this.jumpsRemaining = 1;
+          this.slamActive = false;
           this.invulnerableTimer = 1.1;
           this.audio.sfx.playMiss();
           this.triggerScreenShake(0.26, 8.0);
@@ -1455,8 +1404,9 @@ export class GameEngine {
       }
     }
 
-    // Gentle momentum baseline while sprinting cleanly
-    this.surfMomentum = Math.max(0.22, Math.min(1.0, this.surfMomentum - 0.06 * dt + 0.04 * dt));
+    // Gentle momentum baseline while sprinting cleanly (Treble Blink retains momentum 35% longer)
+    const momentumDecay = (this.activeForm === 'treble' ? 0.02 * 0.65 : 0.02) * dt;
+    this.surfMomentum = Math.max(0.22, Math.min(1.0, this.surfMomentum - momentumDecay));
 
     if (
       (this.overdriveTimer > 0 || this.surfMomentum > 0.72) &&
@@ -1499,12 +1449,13 @@ export class GameEngine {
           this.jumpsRemaining = this.playerController.profile.maxJumps;
           if (isSlamHit) {
             this.playerVy = -895;
-            this.addResonanceGauge(12);
+            this.addResonanceGauge(14);
             this.audio.sfx.playSlamImpact();
             this.triggerScreenShake(0.26, 8.5);
             this.vfx.spawnShockwave(playerScreenX, padY, 22, 310, [255, 210, 50], 1.0);
             this.vfx.spawnBurst(playerScreenX, padY, [255, 230, 0], 22);
             // Shatter nearby hazards with the SlamPad shockwave!
+            let slamShattered = 0;
             for (const trap of this.terrain.getTraps()) {
               if (
                 !trap.destroyed &&
@@ -1512,10 +1463,15 @@ export class GameEngine {
                 trap.worldX <= playerWorldX + 380
               ) {
                 trap.destroyed = true;
+                slamShattered++;
                 this.scoreJudge.recordTrapDestroyed();
               }
             }
-            this.emitJudgment('PERFECT', playerScreenX, padY - 14, 0, 400, 0, true);
+            if (slamShattered > 0 && this.activeForm === 'bass') {
+              this.addResonanceGauge(6 * slamShattered);
+            }
+            const slamBasePts = this.activeForm === 'bass' ? 500 : 400;
+            this.emitJudgment('PERFECT', playerScreenX, padY - 14, 0, slamBasePts, 0, true);
             this.setBanner({ key: 'slamImpact' }, 1.35);
           } else {
             this.playerVy = -560;
@@ -1523,6 +1479,7 @@ export class GameEngine {
             this.emitJudgment('GOOD', playerScreenX, padY - 12, undefined, 170, undefined, true);
           }
         } else {
+          this.slamActive = false;
           this.playerVy = -855; // High super-bounce onto 2F Sky Platform or across wide chasm!
           this.isGrounded = false;
           this.jumpsRemaining = this.playerController.profile.maxJumps;
@@ -1555,17 +1512,27 @@ export class GameEngine {
       }
     }
 
-    // 5. Collect Rhythm Beat Notes & Prism Stars (`ResonanceOrb`) + 3-Color Band Magnetism
+    // 5. Collect Rhythm Beat Notes & Prism Stars (`ResonanceOrb`) + Omni-Band Magnetism
+    const styleMagnetRadius =
+      this.activeForm === 'synth' ? (this.dashTimer > 0 ? 210 : 128) : 78;
+    const isMagneticSurge =
+      this.overdriveTimer > 0 || (this.activeForm === 'synth' && this.dashTimer > 0);
     for (const orb of this.terrain.getOrbs()) {
       if (orb.collected) continue;
       let orbY = orb.screenY ?? orb.worldY;
-      const isBandMatch = this.overdriveTimer > 0 || this.activeForm === orb.band;
-      const magnetRadius = this.overdriveTimer > 0 ? 185 : !orb.isPrismStar && isBandMatch ? 118 : 0;
+      const magnetRadius =
+        this.overdriveTimer > 0
+          ? orb.isPrismStar
+            ? 195
+            : Math.max(195, styleMagnetRadius)
+          : orb.isPrismStar
+            ? 0
+            : styleMagnetRadius;
 
       if (magnetRadius > 0) {
         const distToPlayer = Math.hypot(orb.worldX - playerWorldX, orbY - this.playerY);
         if (distToPlayer <= magnetRadius && distToPlayer > 1) {
-          const pull = Math.min(1, dt * (this.overdriveTimer > 0 ? 17 : 12.5));
+          const pull = Math.min(1, dt * (isMagneticSurge ? 17 : 13));
           orb.worldX += (playerWorldX - orb.worldX) * pull;
           orbY += (this.playerY - orbY) * pull;
           orb.screenY = orbY;
@@ -1583,18 +1550,7 @@ export class GameEngine {
       }
     }
 
-    // 6. Check Frequency Diving Node Collision -> Trigger Infinite Scale Transition
-    for (const node of this.terrain.getDivingNodes()) {
-      if (node.activated) continue;
-      const dist = Math.hypot(node.worldX - playerWorldX, node.worldY - this.playerY);
-      if (dist <= node.radius + this.playerRadius + 16) {
-        node.activated = true;
-        this.beginScaleZoomIn(node.targetForm, playerScreenX, node.worldY);
-        return;
-      }
-    }
-
-    // 7. Check Ground Beat Traps & Aerial BeatDrones
+    // 6. Check Ground Beat Traps & Aerial BeatDrones
     const isStriking =
       this.overdriveTimer > 0 ||
       this.strikeTimer > 0 ||
@@ -1618,14 +1574,18 @@ export class GameEngine {
             this.scoreJudge.recordTrapDestroyed();
             this.scoreJudge.recordGimmickTriggered();
             // Slicing a BeatDrone instantly refills Dash/Skill & Air Jumps!
-            this.dashCooldown = 0;
+            if (this.dashCooldown > 0) {
+              this.dashCooldown = 0;
+              this.hudDirty = true;
+            }
             this.jumpsRemaining = this.playerController.profile.maxJumps;
-            this.addResonanceGauge(8);
+            this.addResonanceGauge(this.activeForm === 'bass' ? 16 : 10);
             this.audio.sfx.playHazardShatter();
             this.triggerScreenShake(0.18, 6.0);
             this.vfx.spawnShockwave(playerScreenX, droneY, 16, 155, [5, 213, 255], 1.0);
             this.vfx.spawnBurst(playerScreenX, droneY, [255, 42, 109], 20);
-            this.emitJudgment('PERFECT', playerScreenX, droneY, 0, 340, 0, true);
+            const droneBasePts = this.activeForm === 'bass' ? 425 : 340;
+            this.emitJudgment('PERFECT', playerScreenX, droneY, 0, droneBasePts, 0, true);
             this.setBanner({ key: 'droneShatter' }, 1.25);
           } else if (this.invulnerableTimer <= 0) {
             trap.destroyed = true;
@@ -1655,14 +1615,24 @@ export class GameEngine {
           if (
             this.overdriveTimer > 0 ||
             this.airBoostTimer > 0 ||
-            (this.dashTimer > 0 && this.activeForm === 'treble')
+            (this.dashTimer > 0 && this.playerController.profile.piercesTrapsDuringDash)
           ) {
             trap.destroyed = true;
             this.scoreJudge.recordTrapDestroyed();
+            if (this.activeForm === 'treble') {
+              if (this.dashCooldown > 0) {
+                this.dashCooldown *= 0.5;
+                this.hudDirty = true;
+              }
+              this.addResonanceGauge(6);
+            } else if (this.activeForm === 'bass') {
+              this.addResonanceGauge(6);
+            }
             this.audio.sfx.playHazardShatter();
             this.triggerScreenShake(0.16, 5.5);
             this.vfx.spawnBurst(playerScreenX, trapFloorY - 20, [255, 230, 0], 14);
-            this.emitJudgment('PERFECT', playerScreenX, trapFloorY - 20, 0, 300, 0);
+            const trapBasePts = this.activeForm === 'bass' ? 375 : 300;
+            this.emitJudgment('PERFECT', playerScreenX, trapFloorY - 20, 0, trapBasePts, 0);
           } else if (this.invulnerableTimer <= 0) {
             trap.destroyed = true;
             this.invulnerableTimer = 1.1;
@@ -1701,8 +1671,9 @@ export class GameEngine {
     }
     if (shattered > 0) {
       this.scoreJudge.recordTrapDestroyed(shattered);
+      this.addResonanceGauge(6 * shattered);
       this.audio.sfx.playHazardShatter();
-      this.emitJudgment('PERFECT', screenX, screenY, 0, 280 * shattered, 0);
+      this.emitJudgment('PERFECT', screenX, screenY, 0, 350 * shattered, 0);
     }
     this.setBanner(
       shattered > 0
@@ -1710,146 +1681,6 @@ export class GameEngine {
         : { key: 'shockwaveNoHit' },
       1.3
     );
-  }
-
-  private beginScaleZoomIn(
-    targetForm: ResonanceFormType,
-    focalX: number,
-    focalY: number
-  ): void {
-    this.phase = 'ZOOM_IN';
-    this.divingTargetForm = targetForm;
-    this.transitionTimer = 0;
-    this.focalScreenX = focalX;
-    this.focalScreenY = focalY;
-    // Preserve player's hard-earned `resonanceGauge`! Track MICRO tunnel progress independently.
-    this.microSyncProgress = 18;
-    this.hudDirty = true;
-
-    this.audio.setAcousticZoom(targetForm);
-    this.setBanner({ key: 'zoomIn', params: { form: targetForm } }, 1.5);
-  }
-
-  private updateZoomInTransition(dt: number, playerScreenX: number): void {
-    const duration = 0.65;
-    this.transitionTimer += dt;
-    const progress = Math.min(1.0, this.transitionTimer / duration);
-
-    this.zoomScale = Math.pow(ZOOM_THRESHOLD, progress);
-    this.rebasedZoomDisplay = this.zoomScale;
-    this.focalScreenX = playerScreenX;
-    this.focalScreenY = this.playerY;
-
-    if (this.zoomScale >= ZOOM_THRESHOLD) {
-      this.zoomScale = 1.0;
-      this.rebasedZoomDisplay = 64.0;
-      this.phase = 'MICRO';
-      this.hudDirty = true;
-      this.microPolarity = -1;
-      this.playerY = this.height * 0.34;
-      this.playerRotation = 0;
-
-      const playerWorldX = this.cameraX + playerScreenX;
-      this.microGates = [];
-      this.nextMicroGateX = playerWorldX + 380;
-      for (let i = 0; i < 7; i++) {
-        this.microGates.push({
-          id: this.nextMicroGateId++,
-          worldX: this.nextMicroGateX,
-          safePolarity: i % 2 === 0 ? -1 : 1,
-          passed: false,
-          hit: false,
-        });
-        this.nextMicroGateX += 270;
-      }
-
-      this.setBanner({ key: 'microEnter' }, 2.2);
-    }
-  }
-
-  private updateMicroPhase(
-    dt: number,
-    playerScreenX: number,
-    playerWorldX: number
-  ): void {
-    const targetLaneY =
-      this.microPolarity === -1 ? this.height * 0.34 : this.height * 0.66;
-    this.playerY += (targetLaneY - this.playerY) * Math.min(1, dt * 26);
-    this.playerRotation = 0;
-
-    this.microSyncProgress = Math.min(100, this.microSyncProgress + dt * 18);
-    this.scoreJudge.addRawScore(dt * 110 * Math.min(250, this.scoreJudge.combo));
-
-    for (const gate of this.microGates) {
-      const dx = Math.abs(gate.worldX - playerWorldX);
-      if (dx < 26 && !gate.passed && !gate.hit) {
-        if (this.microPolarity === gate.safePolarity) {
-          gate.passed = true;
-          this.microSyncProgress = Math.min(100, this.microSyncProgress + 15);
-          this.audio.sfx.playNoteHit(this.divingTargetForm, 'PERFECT', true);
-          this.emitJudgment('PERFECT', playerScreenX, this.playerY, 0, 260, 0, true);
-        } else {
-          gate.hit = true;
-          this.microSyncProgress = Math.max(10, this.microSyncProgress - 8);
-          this.audio.sfx.playMiss();
-          this.triggerScreenShake(0.2, 6.0);
-          this.emitJudgment('MISS', playerScreenX, this.playerY, undefined, 0, undefined, true);
-          this.vfx.spawnBurst(playerScreenX, this.playerY, [255, 50, 95], 12);
-        }
-      }
-    }
-
-    const lastGate = this.microGates[this.microGates.length - 1];
-    if (
-      this.microSyncProgress >= 100 ||
-      (lastGate && playerWorldX > lastGate.worldX + 180)
-    ) {
-      this.microSyncProgress = 100;
-      this.addResonanceGauge(25);
-      this.playerController.swapForm(this.divingTargetForm);
-      this.activeForm = this.playerController.form;
-      this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.35);
-      this.scoreJudge.recordDiveCompleted();
-      this.phase = 'ZOOM_OUT';
-      this.hudDirty = true;
-      this.transitionTimer = 0;
-      this.zoomScale = 8.0;
-      this.audio.setAcousticZoom('macro');
-      this.vfx.spawnBurst(
-        playerScreenX,
-        this.playerY,
-        FORM_CONFIG[this.activeForm].rgb,
-        32
-      );
-      this.setBanner({ key: 'resonanceSwap', params: { form: this.activeForm } }, 2.4);
-    }
-  }
-
-  private updateZoomOutTransition(
-    dt: number,
-    playerScreenX: number,
-    playerWorldX: number
-  ): void {
-    const duration = 0.45;
-    this.transitionTimer += dt;
-    const progress = Math.min(1.0, this.transitionTimer / duration);
-
-    this.zoomScale = 8.0 - 7.0 * progress;
-    this.rebasedZoomDisplay = 64.0 * (1 - progress) + 1.0 * progress;
-    this.focalScreenX = playerScreenX;
-
-    const { floorY } = this.terrain.sampleFloor(playerWorldX);
-    this.playerY = floorY - this.playerRadius - 40 * (1 - progress);
-    this.focalScreenY = this.playerY;
-
-    if (progress >= 1.0) {
-      this.zoomScale = 1.0;
-      this.rebasedZoomDisplay = 1.0;
-      this.phase = 'MACRO';
-      this.hudDirty = true;
-      this.isGrounded = true;
-      this.jumpsRemaining = this.activeForm === 'synth' ? 2 : 1;
-    }
   }
 
   private setBanner(message: BannerMessage, durationSec: number): void {

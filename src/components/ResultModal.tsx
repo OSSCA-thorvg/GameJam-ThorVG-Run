@@ -115,7 +115,7 @@ export const ResultModal: React.FC<ResultModalProps> = ({
           </div>
           <div className="stat-item">
             <small>{t.result.dives}</small>
-            <strong>{format(t.result.divesValue, { count: hud.divesCompleted })}</strong>
+            <strong>{format(t.result.divesValue, { count: hud.gimmicksTriggered ?? 0 })}</strong>
           </div>
           <div className="stat-item">
             <small>{t.result.traps}</small>

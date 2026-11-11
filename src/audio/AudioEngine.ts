@@ -1,4 +1,4 @@
-import type { AcousticZoomMode, FrequencyBands, SfxMode, TrackMetadata } from '../types/game';
+import type { FrequencyBands, SfxMode, TrackMetadata } from '../types/game';
 import { loadSfxMode, saveSfxMode } from '../engine/recordsStore';
 import {
   AudioLoadError,
@@ -13,14 +13,13 @@ import { SfxSynth } from './SfxSynth';
 
 /**
  * Web Audio API Engine for ThorVG Run.
- * Pipeline: AudioBufferSourceNode -> BiquadFilterNode (Acoustic Zoom) -> AnalyserNode -> GainNode -> Destination
+ * Pipeline: AudioBufferSourceNode -> AnalyserNode -> GainNode -> Destination
  */
 export class AudioEngine {
   public readonly sfx: SfxSynth = new SfxSynth();
 
   private ctx: AudioContext | null = null;
   private sourceNode: AudioBufferSourceNode | null = null;
-  private filterNode: BiquadFilterNode | null = null;
   private analyserNode: AnalyserNode | null = null;
   private gainNode: GainNode | null = null;
   private currentBuffer: AudioBuffer | null = null;
@@ -34,7 +33,6 @@ export class AudioEngine {
   private pauseOffset: number = 0;
   private lastBeatTime: number = 0;
   private rollingLowAvg: number = 0.25;
-  private currentZoomMode: AcousticZoomMode = 'macro';
 
   constructor() {
     this.sfx.setMode(loadSfxMode());
@@ -55,11 +53,6 @@ export class AudioEngine {
       this.ctx = new AudioCtx();
       this.sfx.attachContext(this.ctx);
 
-      this.filterNode = this.ctx.createBiquadFilter();
-      this.filterNode.type = 'lowpass';
-      this.filterNode.frequency.value = 20000;
-      this.filterNode.Q.value = 0.707;
-
       this.analyserNode = this.ctx.createAnalyser();
       this.analyserNode.fftSize = 2048;
       this.analyserNode.smoothingTimeConstant = 0.72;
@@ -67,7 +60,6 @@ export class AudioEngine {
       this.gainNode = this.ctx.createGain();
       this.gainNode.gain.value = 0.85;
 
-      this.filterNode.connect(this.analyserNode);
       this.analyserNode.connect(this.gainNode);
       this.gainNode.connect(this.ctx.destination);
 
@@ -183,13 +175,12 @@ export class AudioEngine {
     const source = ctx.createBufferSource();
     source.buffer = this.currentBuffer;
     source.loop = false;
-    source.connect(this.filterNode!);
+    source.connect(this.analyserNode!);
 
     this.startTimestamp = ctx.currentTime - this.pauseOffset;
     source.start(0, this.pauseOffset);
     this.sourceNode = source;
     this.isPlaying = true;
-    this.setAcousticZoom('macro');
 
     source.onended = () => {
       if (this.sourceNode === source) {
@@ -227,20 +218,18 @@ export class AudioEngine {
       return;
     }
 
-    const prevZoom = this.currentZoomMode;
     this.stopSourceOnly();
 
     const source = ctx.createBufferSource();
     source.buffer = this.currentBuffer;
     source.loop = false;
-    source.connect(this.filterNode!);
+    source.connect(this.analyserNode!);
 
     const offset = Math.max(0, this.pauseOffset);
     this.startTimestamp = ctx.currentTime - offset;
     source.start(0, offset);
     this.sourceNode = source;
     this.isPlaying = true;
-    this.setAcousticZoom(prevZoom);
 
     source.onended = () => {
       if (this.sourceNode === source) {
@@ -267,45 +256,6 @@ export class AudioEngine {
       }
       this.sourceNode = null;
     }
-  }
-
-  /**
-   * Controls Web Audio API BiquadFilterNode for Acoustic Zoom (Macro <-> Micro).
-   * - macro: Full spectrum (lowpass 20kHz)
-   * - bass: Low-pass filter (20Hz ~ 250Hz emphasis)
-   * - synth: Band-pass filter (250Hz ~ 4kHz emphasis)
-   * - treble: High-pass filter (4kHz ~ 20kHz emphasis)
-   */
-  public setAcousticZoom(mode: AcousticZoomMode): void {
-    this.currentZoomMode = mode;
-    if (!this.ctx || !this.filterNode) return;
-
-    const now = this.ctx.currentTime;
-    this.filterNode.frequency.cancelScheduledValues(now);
-    this.filterNode.Q.cancelScheduledValues(now);
-
-    if (mode === 'macro') {
-      this.filterNode.type = 'lowpass';
-      this.filterNode.frequency.setTargetAtTime(20000, now, 0.08);
-      this.filterNode.Q.setTargetAtTime(0.707, now, 0.08);
-    } else if (mode === 'bass') {
-      this.filterNode.type = 'lowpass';
-      this.filterNode.frequency.setTargetAtTime(240, now, 0.06);
-      this.filterNode.Q.setTargetAtTime(3.2, now, 0.06);
-    } else if (mode === 'synth') {
-      this.filterNode.type = 'bandpass';
-      this.filterNode.frequency.setTargetAtTime(1250, now, 0.06);
-      this.filterNode.Q.setTargetAtTime(1.85, now, 0.06);
-    } else if (mode === 'treble') {
-      this.filterNode.type = 'highpass';
-      this.filterNode.frequency.setTargetAtTime(4000, now, 0.06);
-      this.filterNode.Q.setTargetAtTime(2.8, now, 0.06);
-    }
-  }
-
-  /** Current Acoustic Zoom mode. The UI localizes it via `t.filter[mode]`. */
-  public getAcousticZoomMode(): AcousticZoomMode {
-    return this.currentZoomMode;
   }
 
   /**

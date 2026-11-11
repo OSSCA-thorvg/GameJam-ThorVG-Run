@@ -1,5 +1,3 @@
-import type { ResonanceFormType } from '../types/game';
-
 export interface GameInputCommands {
   isGameActive: () => boolean;
   isPaused: () => boolean;
@@ -8,7 +6,6 @@ export interface GameInputCommands {
   onPrimaryRelease: () => void;
   onDiveHoldChange: (held: boolean) => void;
   onSecondaryPress: () => void;
-  onSwapForm: (targetForm?: ResonanceFormType) => void;
   onActivateOverdrive?: () => void;
   onCycleSfxMode?: () => void;
   onTogglePause: () => void;
@@ -108,14 +105,6 @@ export class InputController {
         e.preventDefault();
         if (e.repeat) return;
         this.commands.onSecondaryPress();
-      } else if (e.code === 'Digit1') {
-        if (!e.repeat) this.commands.onSwapForm('bass');
-      } else if (e.code === 'Digit2') {
-        if (!e.repeat) this.commands.onSwapForm('synth');
-      } else if (e.code === 'Digit3') {
-        if (!e.repeat) this.commands.onSwapForm('treble');
-      } else if (e.code === 'KeyQ') {
-        if (!e.repeat) this.commands.onSwapForm();
       } else if (e.code === 'KeyE' || e.code === 'Enter') {
         if (!e.repeat) {
           e.preventDefault();

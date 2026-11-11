@@ -15,7 +15,6 @@ import {
 } from '../types/game';
 import { buildCharacterMatrix } from './characterMatrix';
 import { renderMacroWorldPass } from './passes/macroWorldPass';
-import { renderMicroTunnelPass } from './passes/microTunnelPass';
 import { appendPolygonPath, drawPlayerPolygon } from './passes/playerGeometry';
 import { renderMenuPreviewPass } from './passes/previewPass';
 import { resetWorldShapeLayers, type TvgShapePool } from './passes/shapePool';
@@ -141,7 +140,6 @@ export class ThorVGRenderer {
         prismStars: new TVG.Shape(),
         timingRings: new TVG.Shape(),
         traps: new TVG.Shape(),
-        portals: new TVG.Shape(),
         effects: new TVG.Shape(),
         playerGlow: new TVG.Shape(),
         playerCore: new TVG.Shape(),
@@ -176,7 +174,6 @@ export class ThorVGRenderer {
         shapes.prismStars,
         shapes.timingRings,
         shapes.traps,
-        shapes.portals,
         shapes.effects,
         shapes.playerGlow,
         shapes.playerCore,
@@ -200,7 +197,6 @@ export class ThorVGRenderer {
         .add(shapes.prismStars)
         .add(shapes.timingRings)
         .add(shapes.traps)
-        .add(shapes.portals)
         .add(shapes.effects)
         .add(shapes.playerGlow)
         .add(shapes.playerCore);
@@ -324,7 +320,7 @@ export class ThorVGRenderer {
   }
 
   /**
-   * Immediately resets all 21 pooled TvgShape layers, hides character/splash pictures,
+   * Immediately resets all 20 pooled TvgShape layers, hides character/splash pictures,
    * fills an opaque #070914 background, and flushes the canvas so zero menu/scene
    * remnants survive across screen transitions.
    */
@@ -474,7 +470,7 @@ export class ThorVGRenderer {
     if (!this.canvas || !this.tvg || !this.shapes || this.disposed) return;
 
     const shapes = this.shapes;
-    const { width, height, phase, activeForm, frequency } = state;
+    const { width, height, activeForm, frequency } = state;
     const [fr, fg, fb] = FORM_CONFIG[activeForm].rgb;
 
     const zoom = Math.max(0.05, state.zoomScale);
@@ -488,33 +484,20 @@ export class ThorVGRenderer {
     const ty = (y: number) => fy + (y - panY - fy) * zoom + syOff;
     const invTx = (sx: number) => panX + fx + (sx - sxOff - fx) / zoom;
     const invTy = (sy: number) => panY + fy + (sy - syOff - fy) / zoom;
-    // Linear up to 24x so 0.20x..20.0x user zoom has 0.0px foot-to-floor error, while 50x portal dive remains bounded on CPU SwCanvas
+    // Linear up to 24x so 0.20x..20.0x user zoom has 0.0px foot-to-floor error, while extreme zoom remains bounded on CPU SwCanvas
     const ts = (s: number) => s * Math.min(zoom, 24);
 
     // 1. Background
     const pulseBoost = Math.floor((frequency.low * 0.6 + (state.beatPulse ?? 0) * 0.5) * 28);
-    if (phase === 'MICRO') {
-      const [mr, mg, mb] = FORM_CONFIG[state.divingTargetForm].rgb;
-      shapes.bg
-        .reset()
-        .appendRect(0, 0, width, height)
-        .fill(
-          Math.min(45, 8 + Math.floor(mr * 0.12)),
-          Math.min(45, 8 + Math.floor(mg * 0.12)),
-          Math.min(55, 16 + Math.floor(mb * 0.14)),
-          255
-        );
-    } else {
-      shapes.bg
-        .reset()
-        .appendRect(0, 0, width, height)
-        .fill(
-          7 + Math.floor(pulseBoost * 0.5),
-          9 + Math.floor(pulseBoost * 0.3),
-          20 + pulseBoost,
-          255
-        );
-    }
+    shapes.bg
+      .reset()
+      .appendRect(0, 0, width, height)
+      .fill(
+        7 + Math.floor(pulseBoost * 0.5),
+        9 + Math.floor(pulseBoost * 0.3),
+        20 + pulseBoost,
+        255
+      );
 
     // 2. Dynamic Speed Grid (Inverse-projected full-viewport adaptive vector grid)
     shapes.grid.reset();
@@ -539,14 +522,10 @@ export class ThorVGRenderer {
     }
     shapes.grid.stroke({
       width: 1,
-      color: phase === 'MICRO' ? [fr, fg, fb, 65] : [40, 65, 110, 82],
+      color: [40, 65, 110, 82],
     });
 
-    if (phase === 'MICRO') {
-      renderMicroTunnelPass(shapes, state, tx, ty, ts, invTx);
-    } else {
-      renderMacroWorldPass(shapes, state, tx, ty, ts);
-    }
+    renderMacroWorldPass(shapes, state, tx, ty, ts);
 
     // 3. Afterimage Trails, Speed Lines (`effects`) & 3-Color Additive Shockwaves + Diamond Shards (`vfx*`)
     shapes.effects.reset();
@@ -629,16 +608,8 @@ export class ThorVGRenderer {
     if (this.crewAnim) {
       const heightPx = pr * CREW_HEIGHT_RATIO;
       const cx = px;
-      let cy: number;
-      let rotation = 0;
-      let flip: 1 | -1 = 1;
-      if (phase === 'MICRO') {
-        flip = state.microPolarity === -1 ? -1 : 1;
-        cy = py + (flip === -1 ? heightPx / 2 : -heightPx / 2);
-      } else {
-        rotation = state.playerRotation;
-        cy = py + pr - heightPx / 2;
-      }
+      const rotation = state.playerRotation;
+      const cy = py + pr - heightPx / 2;
       drawPlayerPolygon(
         shapes.playerGlow,
         shapes.playerCore,
@@ -654,7 +625,7 @@ export class ThorVGRenderer {
         isOverdrive
       );
       const blink = isInvulnerable && Math.floor(state.timeSec * 12) % 2 === 0;
-      this.drawCrewmate(cx, cy, heightPx, rotation, flip, state.runCycleTime, blink ? 90 : 255);
+      this.drawCrewmate(cx, cy, heightPx, rotation, 1, state.runCycleTime, blink ? 90 : 255);
     } else {
       drawPlayerPolygon(
         shapes.playerGlow,

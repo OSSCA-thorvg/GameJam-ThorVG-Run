@@ -5,7 +5,6 @@ import {
   type BezierSegment,
   type DashRing,
   type DifficultyMode,
-  type DivingNode,
   type HoldRail,
   type JumpPad,
   type LoadingProgress,
@@ -102,11 +101,8 @@ class GroundOccupancy {
 
 interface BuiltRoadTopology {
   segments: BezierSegment[];
-  divingNodes: DivingNode[];
   gapSliceSet: Set<number>;
-  nearPortal: (wx: number, margin?: number) => boolean;
   floorAtWorldX: (wx: number) => { y: number; isGap: boolean; seg: BezierSegment };
-  nextEntityId: number;
 }
 
 function buildRoadTopology(
@@ -114,7 +110,7 @@ function buildRoadTopology(
   segWidth: number,
   tuning: CourseTuningProfile
 ): BuiltRoadTopology {
-  const { totalSlices, slices, sliceIntensity, sliceBand, sliceHasBeat } = dsp;
+  const { totalSlices, slices, sliceIntensity, sliceHasBeat } = dsp;
   const segments: BezierSegment[] = [];
   const startDeckY = DECK_HEIGHTS[0];
 
@@ -166,45 +162,12 @@ function buildRoadTopology(
     }
   }
 
-  const divingNodes: DivingNode[] = [];
-  const portalWorldXs: number[] = [];
-  let nextEntityId = 1;
-  let lastPortalSec = 8.0;
-
-  for (let i = 36; i < totalSlices - 16; i++) {
-    const sec = i * SLICE_DURATION_SEC;
-    const prevInten = sliceIntensity[i - 1] ?? 'calm';
-    const inten = sliceIntensity[i] ?? 'groove';
-    const isUpgrade =
-      (prevInten === 'calm' && inten !== 'calm') || (prevInten === 'groove' && inten === 'drop');
-
-    if (sec - lastPortalSec >= 18.0 || (isUpgrade && sec - lastPortalSec >= 11.5)) {
-      lastPortalSec = sec;
-      const deckY = DECK_HEIGHTS[sliceDeckLevel[i] ?? 0];
-      const wx = (i + 0.5) * segWidth;
-      portalWorldXs.push(wx);
-      divingNodes.push({
-        id: nextEntityId++,
-        worldX: wx,
-        worldY: deckY - 68,
-        radius: 30,
-        targetForm: sliceBand[i] ?? 'synth',
-        activated: false,
-      });
-    }
-  }
-
-  const nearPortal = (wx: number, margin: number = 420): boolean =>
-    portalWorldXs.some((px) => Math.abs(px - wx) < margin);
-
   let lastGapSlice = 10;
   for (let i = 16; i < totalSlices - 12; i++) {
     if (i - lastGapSlice < tuning.minGapIntervalSlices) continue;
     const inten = sliceIntensity[i] ?? 'calm';
     if (inten === 'calm' && !tuning.allowCalmGaps) continue;
     if (!sliceHasBeat.has(i)) continue;
-    const wx = i * segWidth;
-    if (nearPortal(wx, 520)) continue;
 
     const takeoffLevel = sliceDeckLevel[i - 1] ?? 0;
     sliceDeckLevel[i - 1] = takeoffLevel;
@@ -268,7 +231,7 @@ function buildRoadTopology(
     };
   };
 
-  return { segments, divingNodes, gapSliceSet, nearPortal, floorAtWorldX, nextEntityId };
+  return { segments, gapSliceSet, floorAtWorldX };
 }
 
 /**
@@ -307,7 +270,7 @@ export async function analyzeTrackBlueprint(
   await nextFrame();
 
   const road = buildRoadTopology(dsp, segWidth, tuning);
-  let nextId = road.nextEntityId;
+  let nextId = 1;
 
   onProgress?.({ progress: 0.85, stage: 'placingObjects' });
   await nextFrame();
@@ -397,7 +360,6 @@ export async function analyzeTrackBlueprint(
     const platDurationSec = beat.intensity === 'drop' ? 2.2 : 1.75;
     const platEndX = platStartX + worldPxPerSec * platDurationSec;
 
-    if (road.nearPortal(padX, 450) || road.nearPortal(platEndX, 450)) continue;
     if (ground.isBusy(padX - 90, platStartX + 80)) continue;
     const { y: padFloorY, isGap } = road.floorAtWorldX(padX);
     if (isGap) continue;
@@ -466,7 +428,7 @@ export async function analyzeTrackBlueprint(
         }
       }
 
-      if (beat.intensity === 'drop' && !road.nearPortal(platEndX + 80, 340)) {
+      if (beat.intensity === 'drop') {
         const ringX = platEndX + 68;
         dashRings.push({
           id: nextId++,
@@ -480,11 +442,7 @@ export async function analyzeTrackBlueprint(
         // Place a Ground SlamPad (`kind: 'slam'`) right past 2F Sky Platform exit to reward S/Down Fast-Drop!
         const slamX = platEndX + 115;
         const slamFloor = road.floorAtWorldX(slamX);
-        if (
-          !slamFloor.isGap &&
-          !road.nearPortal(slamX, 340) &&
-          !ground.isBusy(slamX - 70, slamX + 190)
-        ) {
+        if (!slamFloor.isGap && !ground.isBusy(slamX - 70, slamX + 190)) {
           ground.reserve(slamX - 65, slamX + 185);
           jumpPads.push({
             id: nextId++,
@@ -521,7 +479,7 @@ export async function analyzeTrackBlueprint(
     if (beat.band !== 'bass' || beat.strength < 0.56) continue;
     if (beat.worldX < lastSlamPadX + 2250) continue;
     const sx = beat.worldX;
-    if (road.nearPortal(sx, 380) || ground.isBusy(sx - 130, sx + 190)) continue;
+    if (ground.isBusy(sx - 130, sx + 190)) continue;
     const fLead = road.floorAtWorldX(sx - 95);
     const fSlam = road.floorAtWorldX(sx);
     if (fLead.isGap || fSlam.isGap) continue;
@@ -573,7 +531,6 @@ export async function analyzeTrackBlueprint(
     const rx0 = beat.worldX;
     const rx1 = rx0 + railLenPx;
 
-    if (road.nearPortal(rx0, 380) || road.nearPortal(rx1, 380)) continue;
     if (ground.isBusy(rx0 - 90, rx1 + 90)) continue;
 
     const f0 = road.floorAtWorldX(rx0);
@@ -605,7 +562,6 @@ export async function analyzeTrackBlueprint(
     const beat = dsp.beatEvents[bIdx]!;
     if (beat.timeSec < 1.4 || beat.timeSec > dsp.durationSec - 1.8) continue;
     const wx = beat.worldX;
-    if (road.nearPortal(wx, 280)) continue;
 
     const { y: floorY, isGap } = road.floorAtWorldX(wx);
     if (isGap || ground.isBusy(wx - 55, wx + 55)) continue;
@@ -766,13 +722,13 @@ export async function analyzeTrackBlueprint(
       }
     }
 
-    // Fallback: Elevated double-jump / glide apex on solid road away from portals
+    // Fallback: Elevated double-jump / glide apex on solid road
     if (!placedOnGimmick) {
       let probeX = targetX;
       for (let step = 0; step < 12; step++) {
         const candidateX = targetX + (step % 2 === 0 ? 1 : -1) * Math.ceil(step / 2) * 85;
         const fl = road.floorAtWorldX(candidateX);
-        if (!fl.isGap && !road.nearPortal(candidateX, 260)) {
+        if (!fl.isGap) {
           probeX = candidateX;
           starY = Math.max(175, fl.y - 128);
           break;
@@ -814,7 +770,6 @@ export async function analyzeTrackBlueprint(
     segments: road.segments,
     orbs,
     traps,
-    divingNodes: road.divingNodes,
     skyPlatforms,
     jumpPads,
     dashRings,

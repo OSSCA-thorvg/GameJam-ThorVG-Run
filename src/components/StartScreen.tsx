@@ -14,8 +14,10 @@ import { trackArtist, trackTitle } from '../i18n/display';
 import { useI18n } from '../i18n/I18nProvider';
 import { LANGUAGE_LABELS, type Lang } from '../i18n/messages';
 import {
+  FORM_CONFIG,
   type DifficultyMode,
   type RendererMode,
+  type ResonanceFormType,
   type TrackMetadata,
 } from '../types/game';
 
@@ -23,11 +25,13 @@ interface StartScreenProps {
   selectedTrack: TrackMetadata;
   customTracks: TrackMetadata[];
   rendererMode: RendererMode;
+  playstyle: ResonanceFormType;
   difficulty: DifficultyMode;
   engineReady: boolean;
   onSelectTrack: (track: TrackMetadata) => void;
   onUploadFile: (file: File, supportedFormats: readonly AudioFormat[]) => Promise<void>;
   onSelectRenderer: (mode: RendererMode) => void;
+  onSelectPlaystyle: (style: ResonanceFormType) => void;
   onSelectDifficulty: (difficulty: DifficultyMode) => void;
   onStartRun: () => void;
 }
@@ -44,11 +48,13 @@ export const StartScreen: React.FC<StartScreenProps> = ({
   selectedTrack,
   customTracks,
   rendererMode,
+  playstyle,
   difficulty,
   engineReady,
   onSelectTrack,
   onUploadFile,
   onSelectRenderer,
+  onSelectPlaystyle,
   onSelectDifficulty,
   onStartRun,
 }) => {
@@ -193,14 +199,14 @@ export const StartScreen: React.FC<StartScreenProps> = ({
               }}
             />
             <span>{t.upload.dropzone}</span>
-            <small className="upload-formats">{t.upload.addMoreGuide}</small>
             <small className="upload-formats">
               {supportedFormats.length > 0
-                ? format(t.upload.supported, { list: supportedList })
+                ? format(t.upload.compactHint, {
+                    list: supportedList,
+                    maxMb: MAX_UPLOAD_MB,
+                    minSeconds: MIN_TRACK_SECONDS,
+                  })
                 : t.upload.noneSupported}
-            </small>
-            <small className="upload-formats">
-              {format(t.upload.limits, { maxMb: MAX_UPLOAD_MB, minSeconds: MIN_TRACK_SECONDS })}
             </small>
             {uploadStatus && <small className="upload-status">{uploadStatus}</small>}
           </div>
@@ -246,7 +252,50 @@ export const StartScreen: React.FC<StartScreenProps> = ({
           </div>
         </section>
 
-        {/* 3. Select Difficulty & Rhythm Speed */}
+        {/* 3. Select Crewmate Playstyle */}
+        <section className="menu-section">
+          <h2>{t.menu.formSection}</h2>
+          <div className="playstyle-tabs" role="radiogroup" aria-label={t.menu.formSection}>
+            {(['bass', 'synth', 'treble'] as ResonanceFormType[]).map((styleKey) => {
+              const accent = FORM_CONFIG[styleKey].colorHex;
+              const info = t.forms[styleKey];
+              const active = playstyle === styleKey;
+              return (
+                <button
+                  key={styleKey}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  data-testid={`playstyle-tab-${styleKey}`}
+                  data-playstyle={styleKey}
+                  className={`playstyle-tab ${active ? 'active' : ''}`}
+                  style={{
+                    borderColor: active ? accent : undefined,
+                    boxShadow: active ? `0 0 18px ${accent}33` : undefined,
+                  }}
+                  onClick={() => onSelectPlaystyle(styleKey)}
+                >
+                  <div className="playstyle-tab-header">
+                    <strong style={{ color: accent }}>{info.name}</strong>
+                    <small
+                      className="playstyle-skill-pill"
+                      style={{
+                        color: accent,
+                        borderColor: `${accent}55`,
+                        backgroundColor: `${accent}18`,
+                      }}
+                    >
+                      {info.skillName}
+                    </small>
+                  </div>
+                  <span>{info.skillDesc}</span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* 4. Select Difficulty & Rhythm Speed */}
         <section className="menu-section">
           <h2>{t.menu.difficultySection}</h2>
           <div className="difficulty-tabs" role="radiogroup" aria-label={t.menu.difficultySection}>

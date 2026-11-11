@@ -21,7 +21,6 @@ export interface TvgShapePool {
   prismStars: TvgShape;
   timingRings: TvgShape;
   traps: TvgShape;
-  portals: TvgShape;
   effects: TvgShape;
   playerGlow: TvgShape;
   playerCore: TvgShape;
@@ -31,7 +30,7 @@ export interface TvgShapePool {
 }
 
 /**
- * Resets all world & VFX shape layers so phase switches (`MACRO` <-> `MICRO` <-> `Preview`)
+ * Resets all world & VFX shape layers so scene switches (`Gameplay` <-> `Preview`)
  * never leave stale vector paths on screen.
  */
 export function resetWorldShapeLayers(shapes: TvgShapePool): void {
@@ -47,5 +46,4 @@ export function resetWorldShapeLayers(shapes: TvgShapePool): void {
   shapes.prismStars.reset();
   shapes.timingRings.reset();
   shapes.traps.reset();
-  shapes.portals.reset();
 }
