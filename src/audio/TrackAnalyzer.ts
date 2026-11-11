@@ -41,6 +41,7 @@ export interface CourseTuningProfile extends DifficultyDspTuning {
   allowCalmGaps: boolean;
   minSkyGapPx: number;
   minTrapGapPx: number;
+  minDroneGapPx: number;
   minTrapStrength: number;
   trapModulo: number;
   minNoteSpacingPx: number;
@@ -54,6 +55,7 @@ export const DIFFICULTY_COURSE_TUNING: Record<DifficultyMode, CourseTuningProfil
     allowCalmGaps: false,
     minSkyGapPx: 2200,
     minTrapGapPx: 760,
+    minDroneGapPx: 1950,
     minTrapStrength: 0.56,
     trapModulo: 3,
     minNoteSpacingPx: 195,
@@ -65,6 +67,7 @@ export const DIFFICULTY_COURSE_TUNING: Record<DifficultyMode, CourseTuningProfil
     allowCalmGaps: true,
     minSkyGapPx: 1750,
     minTrapGapPx: 560,
+    minDroneGapPx: 1380,
     minTrapStrength: 0.42,
     trapModulo: 2,
     minNoteSpacingPx: 145,
@@ -76,6 +79,7 @@ export const DIFFICULTY_COURSE_TUNING: Record<DifficultyMode, CourseTuningProfil
     allowCalmGaps: true,
     minSkyGapPx: 1450,
     minTrapGapPx: 430,
+    minDroneGapPx: 980,
     minTrapStrength: 0.42,
     trapModulo: 2,
     minNoteSpacingPx: 115,
@@ -472,7 +476,91 @@ export async function analyzeTrackBlueprint(
           timeSec: ringX / worldPxPerSec,
           triggered: false,
         });
+      } else {
+        // Place a Ground SlamPad (`kind: 'slam'`) right past 2F Sky Platform exit to reward S/Down Fast-Drop!
+        const slamX = platEndX + 115;
+        const slamFloor = road.floorAtWorldX(slamX);
+        if (
+          !slamFloor.isGap &&
+          !road.nearPortal(slamX, 340) &&
+          !ground.isBusy(slamX - 70, slamX + 190)
+        ) {
+          ground.reserve(slamX - 65, slamX + 185);
+          jumpPads.push({
+            id: nextId++,
+            worldX: slamX,
+            worldY: slamFloor.y,
+            timeSec: slamX / worldPxPerSec,
+            triggered: false,
+            kind: 'slam',
+          });
+          for (let k = 1; k <= 3; k++) {
+            const nx = slamX + k * 56;
+            const lift = 68 + k * 28;
+            orbs.push({
+              id: nextId++,
+              worldX: nx,
+              worldY: slamFloor.y - lift,
+              radius: 11,
+              band: beat.band,
+              isArcOrb: true,
+              isBeatTarget: k === 1,
+              timeSec: nx / worldPxPerSec,
+              collected: false,
+            });
+          }
+        }
       }
+    }
+  }
+
+  // 4B-2. Standalone Bass-Drop SlamPads (`kind: 'slam'`) preceded by an aerial lead-in note
+  let lastSlamPadX = 950;
+  for (const beat of dsp.beatEvents) {
+    if (beat.timeSec < 3.0 || beat.timeSec > dsp.durationSec - 3.5) continue;
+    if (beat.band !== 'bass' || beat.strength < 0.56) continue;
+    if (beat.worldX < lastSlamPadX + 2250) continue;
+    const sx = beat.worldX;
+    if (road.nearPortal(sx, 380) || ground.isBusy(sx - 130, sx + 190)) continue;
+    const fLead = road.floorAtWorldX(sx - 95);
+    const fSlam = road.floorAtWorldX(sx);
+    if (fLead.isGap || fSlam.isGap) continue;
+
+    ground.reserve(sx - 120, sx + 180);
+    lastSlamPadX = sx;
+    // Lead-in jump orb inviting the player airborne right before slamming down onto the SlamPad
+    orbs.push({
+      id: nextId++,
+      worldX: sx - 92,
+      worldY: fLead.y - 104,
+      radius: 11.5,
+      band: 'bass',
+      isArcOrb: true,
+      isBeatTarget: true,
+      timeSec: (sx - 92) / worldPxPerSec,
+      collected: false,
+    });
+    jumpPads.push({
+      id: nextId++,
+      worldX: sx,
+      worldY: fSlam.y,
+      timeSec: beat.timeSec,
+      triggered: false,
+      kind: 'slam',
+    });
+    for (let k = 1; k <= 2; k++) {
+      const nx = sx + k * 62;
+      orbs.push({
+        id: nextId++,
+        worldX: nx,
+        worldY: fSlam.y - (74 + k * 30),
+        radius: 10.5,
+        band: 'bass',
+        isArcOrb: true,
+        isBeatTarget: false,
+        timeSec: nx / worldPxPerSec,
+        collected: false,
+      });
     }
   }
 
@@ -507,8 +595,10 @@ export async function analyzeTrackBlueprint(
     });
   }
 
-  // 4D. Beat Traps & On-Beat Rhythm Target Notes
+  // 4D. Beat Traps, Aerial BeatDrones & On-Beat Rhythm Target Notes
   let lastTrapX = 450;
+  let lastDroneX = 720;
+  let droneToggle = 0;
   let lastNoteX = 220;
 
   for (let bIdx = 0; bIdx < dsp.beatEvents.length; bIdx++) {
@@ -519,6 +609,51 @@ export async function analyzeTrackBlueprint(
 
     const { y: floorY, isGap } = road.floorAtWorldX(wx);
     if (isGap || ground.isBusy(wx - 55, wx + 55)) continue;
+
+    // Aerial BeatDrone hazard: alternates low strike lane (floorY - 44) and mid-air lane (floorY - 96)
+    const canSpawnDrone =
+      beat.intensity !== 'calm' &&
+      wx - lastDroneX >= tuning.minDroneGapPx &&
+      wx - lastTrapX >= 320 &&
+      beat.strength >= 0.44 &&
+      !road.floorAtWorldX(wx - 90).isGap &&
+      !road.floorAtWorldX(wx + 90).isGap;
+
+    if (canSpawnDrone) {
+      lastDroneX = wx;
+      ground.reserve(wx - 80, wx + 80);
+      const isHighLane = droneToggle % 2 === 1;
+      droneToggle++;
+      const droneY = isHighLane ? floorY - 96 : floorY - 44;
+      traps.push({
+        id: nextId++,
+        worldX: wx,
+        width: 38,
+        height: 38,
+        destroyed: false,
+        passed: false,
+        timeSec: beat.timeSec,
+        isAerialDrone: true,
+        droneWorldY: droneY,
+      });
+
+      // Reward orbs trailing right behind the drone for slicing through with Shift!
+      for (const offset of [54, 108]) {
+        const nx = wx + offset;
+        orbs.push({
+          id: nextId++,
+          worldX: nx,
+          worldY: droneY,
+          radius: 10.5,
+          band: beat.band,
+          isArcOrb: true,
+          isBeatTarget: offset === 54,
+          timeSec: nx / worldPxPerSec,
+          collected: false,
+        });
+      }
+      continue;
+    }
 
     const canSpawnTrap =
       wx - lastTrapX >= tuning.minTrapGapPx &&
@@ -576,6 +711,90 @@ export async function analyzeTrackBlueprint(
     }
   }
 
+  // 4E. Place Exactly 3 High-Risk / High-Route Harmonic Prism Stars (★ 3/3) at ~25%, ~55%, ~82%
+  const playableStartX = worldPxPerSec * 1.8;
+  const playableEndX = Math.max(playableStartX + 900, (dsp.durationSec - 2.0) * worldPxPerSec);
+  const starAnchors = [0.25, 0.55, 0.82];
+  const starBands: Array<'bass' | 'synth' | 'treble'> = ['bass', 'synth', 'treble'];
+  const usedSkyIds = new Set<number>();
+  const usedRingIds = new Set<number>();
+  const usedPadIds = new Set<number>();
+
+  for (let sIdx = 0; sIdx < starAnchors.length; sIdx++) {
+    const ratio = starAnchors[sIdx]!;
+    const targetX = playableStartX + (playableEndX - playableStartX) * ratio;
+    const searchWindow = Math.max(550, (playableEndX - playableStartX) * 0.14);
+
+    let starX = targetX;
+    let starY = DECK_HEIGHTS[0] - 134;
+    let placedOnGimmick = false;
+
+    // Priority 1: High above a 2nd-floor SkyPlatform (requires 2F jump)
+    const candidateSky = skyPlatforms.find(
+      (p) => !usedSkyIds.has(p.id) && Math.abs((p.x0 + p.x1) * 0.5 - targetX) <= searchWindow
+    );
+    if (candidateSky) {
+      usedSkyIds.add(candidateSky.id);
+      starX = (candidateSky.x0 + candidateSky.x1) * 0.5;
+      starY = Math.max(145, candidateSky.worldY - 72);
+      placedOnGimmick = true;
+    }
+
+    // Priority 2: Out of an airborne DashRing burst
+    if (!placedOnGimmick) {
+      const candidateRing = dashRings.find(
+        (r) => !usedRingIds.has(r.id) && Math.abs(r.worldX - targetX) <= searchWindow
+      );
+      if (candidateRing) {
+        usedRingIds.add(candidateRing.id);
+        starX = candidateRing.worldX + 92;
+        starY = Math.max(155, candidateRing.worldY - 22);
+        placedOnGimmick = true;
+      }
+    }
+
+    // Priority 3: Apex of a JumpPad or SlamPad super-bounce
+    if (!placedOnGimmick) {
+      const candidatePad = jumpPads.find(
+        (p) => !usedPadIds.has(p.id) && Math.abs(p.worldX - targetX) <= searchWindow
+      );
+      if (candidatePad) {
+        usedPadIds.add(candidatePad.id);
+        starX = candidatePad.worldX + 102;
+        starY = Math.max(165, candidatePad.worldY - 148);
+        placedOnGimmick = true;
+      }
+    }
+
+    // Fallback: Elevated double-jump / glide apex on solid road away from portals
+    if (!placedOnGimmick) {
+      let probeX = targetX;
+      for (let step = 0; step < 12; step++) {
+        const candidateX = targetX + (step % 2 === 0 ? 1 : -1) * Math.ceil(step / 2) * 85;
+        const fl = road.floorAtWorldX(candidateX);
+        if (!fl.isGap && !road.nearPortal(candidateX, 260)) {
+          probeX = candidateX;
+          starY = Math.max(175, fl.y - 128);
+          break;
+        }
+      }
+      starX = probeX;
+    }
+
+    orbs.push({
+      id: nextId++,
+      worldX: starX,
+      worldY: starY,
+      radius: 16,
+      band: starBands[sIdx % starBands.length]!,
+      isArcOrb: true,
+      isBeatTarget: true,
+      isPrismStar: true,
+      timeSec: starX / worldPxPerSec,
+      collected: false,
+    });
+  }
+
   orbs.sort((a, b) => a.worldX - b.worldX);
   traps.sort((a, b) => a.worldX - b.worldX);
   jumpPads.sort((a, b) => a.worldX - b.worldX);
@@ -602,6 +821,7 @@ export async function analyzeTrackBlueprint(
     holdRails,
     sectionCounts: dsp.sectionCounts,
     totalBeats: dsp.beatEvents.length,
+    totalStars: 3,
   };
 
   blueprintCache.set(cacheKey, blueprint);

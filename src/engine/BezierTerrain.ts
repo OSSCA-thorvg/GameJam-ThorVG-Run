@@ -17,9 +17,9 @@ import { evaluateBezierFloor } from './bezierMath';
 
 const FORMS_ORDER: ResonanceFormType[] = ['bass', 'synth', 'treble'];
 
-export type RuntimeTrap = BeatTrap & { screenFloorY?: number };
+export type RuntimeTrap = BeatTrap & { screenFloorY?: number; baseDroneY?: number };
 
-type RuntimeOrb = ResonanceOrb & { baseY: number };
+type RuntimeOrb = ResonanceOrb & { baseY: number; baseX: number };
 type RuntimePortal = DivingNode & { baseY: number };
 type RuntimeSkyPlatform = SkyPlatform & { baseY: number };
 type RuntimeJumpPad = JumpPad & { baseY: number };
@@ -133,6 +133,7 @@ export class BezierTerrain {
     this.allOrbs = blueprint.orbs
       .map((o) => ({
         ...o,
+        baseX: o.worldX,
         baseY: o.worldY,
         collected: false,
         screenY: o.worldY * scaleY,
@@ -142,9 +143,13 @@ export class BezierTerrain {
     this.allTraps = blueprint.traps
       .map((t) => ({
         ...t,
+        baseDroneY: t.droneWorldY,
         destroyed: false,
         passed: false,
-        screenFloorY: ((t as RuntimeTrap).screenFloorY ?? this.refHeight * 0.7) * scaleY,
+        screenFloorY:
+          t.isAerialDrone && t.droneWorldY !== undefined
+            ? t.droneWorldY * scaleY
+            : ((t as RuntimeTrap).screenFloorY ?? this.refHeight * 0.7) * scaleY,
       }))
       .sort((a, b) => a.worldX - b.worldX);
 
@@ -227,12 +232,16 @@ export class BezierTerrain {
       for (let i = 0; i < this.allOrbs.length; i++) {
         const orb = this.allOrbs[i]!;
         orb.collected = false;
+        orb.worldX = orb.baseX;
         orb.screenY = orb.baseY * scaleY;
       }
       for (let i = 0; i < this.allTraps.length; i++) {
         const trap = this.allTraps[i]!;
         trap.destroyed = false;
         trap.passed = false;
+        if (trap.isAerialDrone && trap.baseDroneY !== undefined) {
+          trap.screenFloorY = trap.baseDroneY * scaleY;
+        }
       }
       for (let i = 0; i < this.allDivingNodes.length; i++) {
         const node = this.allDivingNodes[i]!;
@@ -320,39 +329,65 @@ export class BezierTerrain {
     );
 
     this.visibleSegments.length = 0;
-    const pulse = freq.isBeat ? 2.5 * scaleY : 0;
     for (let i = startIdx; i <= endIdx; i++) {
       const seg = this.allSegments[i];
       const base = this.baseSegments[i];
       if (!seg || !base) continue;
 
+      const isDrop = base.intensity === 'drop';
+      const segPulse = freq.isBeat
+        ? (isDrop ? 9.5 : 3.0) * scaleY
+        : isDrop
+          ? freq.low * 5.0 * scaleY
+          : 0;
+
       seg.y0 = base.y0 * scaleY;
       seg.y1 = base.y1 * scaleY;
-      seg.cy1 = base.cy1 * scaleY - pulse;
-      seg.cy2 = base.cy2 * scaleY - pulse;
+      seg.cy1 = base.cy1 * scaleY - segPulse;
+      seg.cy2 = base.cy2 * scaleY - segPulse;
       this.visibleSegments.push(seg);
     }
 
     const fallbackY = viewportHeight * 0.7;
 
-    // 2. Visible Rhythm Beat Notes — O(log N + K)
+    // 2. Visible Rhythm Beat Notes — O(log N + K) on immutable sorted `baseX` (safe under magnetic `worldX` pull!)
     this.visibleOrbs.length = 0;
-    for (let i = lowerBoundWorldX(this.allOrbs, minX); i < this.allOrbs.length; i++) {
+    let loOrb = 0;
+    let hiOrb = this.allOrbs.length;
+    const orbMinBaseX = minX - 220;
+    const orbMaxBaseX = maxX + 220;
+    while (loOrb < hiOrb) {
+      const mid = (loOrb + hiOrb) >>> 1;
+      if (this.allOrbs[mid]!.baseX < orbMinBaseX) {
+        loOrb = mid + 1;
+      } else {
+        hiOrb = mid;
+      }
+    }
+    for (let i = loOrb; i < this.allOrbs.length; i++) {
       const orb = this.allOrbs[i]!;
-      if (orb.worldX > maxX) break;
+      if (orb.baseX > orbMaxBaseX) break;
       if (orb.collected) continue;
-      orb.screenY = orb.baseY * scaleY + Math.sin(timeSec * 6 + orb.id * 0.5) * 2.5;
+      // Preserve magnetic vertical pull if already pulled away from default bobbing lane
+      const naturalY = orb.baseY * scaleY + Math.sin(timeSec * 6 + orb.id * 0.5) * 2.5;
+      if (orb.worldX === orb.baseX) {
+        orb.screenY = naturalY;
+      }
       this.visibleOrbs.push(orb);
     }
 
-    // 3. Visible Beat Traps anchored to ground road — O(log N + K)
+    // 3. Visible Beat Traps (Ground Spikes) & Aerial BeatDrones — O(log N + K)
     this.visibleTraps.length = 0;
     for (let i = lowerBoundWorldX(this.allTraps, minX); i < this.allTraps.length; i++) {
       const trap = this.allTraps[i]!;
       if (trap.worldX > maxX) break;
       if (trap.destroyed) continue;
-      const { floorY } = evaluateBezierFloor(this.visibleSegments, trap.worldX, fallbackY);
-      trap.screenFloorY = floorY;
+      if (trap.isAerialDrone && trap.baseDroneY !== undefined) {
+        trap.screenFloorY = trap.baseDroneY * scaleY + Math.sin(timeSec * 5.2 + trap.id) * 5.5;
+      } else {
+        const { floorY } = evaluateBezierFloor(this.visibleSegments, trap.worldX, fallbackY);
+        trap.screenFloorY = floorY;
+      }
       this.visibleTraps.push(trap);
     }
 
@@ -479,6 +514,14 @@ export class BezierTerrain {
 
   public getTotalOrbCount(): number {
     return this.allOrbs.length;
+  }
+
+  public getTotalStarCount(): number {
+    let count = 0;
+    for (let i = 0; i < this.allOrbs.length; i++) {
+      if (this.allOrbs[i]!.isPrismStar) count++;
+    }
+    return count;
   }
 
   public getTraps(): RuntimeTrap[] {
