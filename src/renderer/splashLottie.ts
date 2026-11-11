@@ -26,9 +26,9 @@ export interface PreparedSplashLottie {
 const CORE_W = 1920;
 const CORE_H = 1080;
 const PAD_X = 640;
-const PAD_Y = 720;
+const PAD_Y = 820;
 const EXT_W = CORE_W + PAD_X * 2; // 3200
-const EXT_H = CORE_H + PAD_Y * 2; // 2520
+const EXT_H = CORE_H + PAD_Y * 2; // 2720
 const OFFSET_NULL_IND = 9999;
 
 interface LottieShapeItem {

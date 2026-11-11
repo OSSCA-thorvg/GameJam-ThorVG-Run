@@ -38,8 +38,11 @@ interface ContentBox {
   height: number;
 }
 
-/** Splash core logo fits within 60% of the viewport, leaving ample breathing room for lightning bolts. */
-const SPLASH_VIEWPORT_FIT = 0.6;
+/**
+ * Splash core logo fits within ~54% of the viewport so even the peak upward bounce
+ * at frame 160 (origY ≈ -430) stays 100% inside a 16:9 viewport without touching the top edge.
+ */
+const SPLASH_VIEWPORT_FIT = 0.54;
 
 /** The crewmate Lottie composition is 500x500. */
 const CREW_SOURCE_SIZE = 500;

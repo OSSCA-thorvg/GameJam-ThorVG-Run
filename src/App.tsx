@@ -257,7 +257,7 @@ export const App: React.FC = () => {
         setLoadingState({ progress: 1.0, stage: 'ready', blueprint });
 
         // Brief hold at 100% so the player can see the pre-computed track waveform minimap
-        await new Promise((r) => setTimeout(r, 380));
+        await new Promise((r) => setTimeout(r, 480));
         if (launchSeqRef.current !== seq) return;
 
         setScreen('game');

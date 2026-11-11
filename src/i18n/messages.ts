@@ -246,18 +246,18 @@ export const ko: Messages = {
   },
   difficulties: {
     easy: {
-      name: '이지 (EASY)',
-      speed: '450 px/s · 입문 추천',
+      name: '이지 · EASY',
+      speed: '450 px/s · 입문',
       desc: '넉넉한 리듬 판정(±75ms)과 완만한 발판·장애물 간격',
     },
     normal: {
-      name: '노멀 (NORMAL)',
-      speed: '550 px/s · 표준 밸런스',
+      name: '노멀 · NORMAL',
+      speed: '550 px/s · 표준',
       desc: '2층 공중 발판, 점프 패드, 대시 링, 롱노트 레일의 정통 리듬 러닝',
     },
     hard: {
-      name: '하드 (HARD)',
-      speed: '660 px/s · 초고속 챌린지',
+      name: '하드 · HARD',
+      speed: '660 px/s · 챌린지',
       desc: '빠른 질주 속도감과 촘촘한 정박 노트·크레바스 돌파 (±40ms 칼판정)',
     },
   },

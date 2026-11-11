@@ -586,15 +586,16 @@ export class GameEngine {
     }
 
     const playerScreenX = this.getPlayerScreenX();
-    // Exact 0ms synchronization: playerWorldX = cameraX + playerScreenX === audioSec * baseSpeed!
+    // Exact 0.0ms synchronization: advance by baseSpeed * dt first, then correct residual clock drift!
     const targetCameraX = audioSec * this.baseSpeed - playerScreenX;
     const prevCameraX = this.cameraX;
     if (this.audio.playing) {
-      const drift = targetCameraX - this.cameraX;
+      const predictedCameraX = this.cameraX + this.baseSpeed * dt;
+      const drift = targetCameraX - predictedCameraX;
       if (Math.abs(drift) > this.baseSpeed * 0.6) {
         this.cameraX = targetCameraX;
       } else {
-        this.cameraX += this.baseSpeed * dt + drift * Math.min(1, dt * 16);
+        this.cameraX = predictedCameraX + drift * Math.min(1, dt * 18);
       }
     } else {
       this.cameraX += this.baseSpeed * dt;
