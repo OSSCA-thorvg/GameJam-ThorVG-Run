@@ -18,7 +18,7 @@ import { renderMacroWorldPass } from './passes/macroWorldPass';
 import { renderMicroTunnelPass } from './passes/microTunnelPass';
 import { appendPolygonPath, drawPlayerPolygon } from './passes/playerGeometry';
 import { renderMenuPreviewPass } from './passes/previewPass';
-import type { TvgShapePool } from './passes/shapePool';
+import { resetWorldShapeLayers, type TvgShapePool } from './passes/shapePool';
 import { prepareSplashLottie } from './splashLottie';
 
 /**
@@ -126,64 +126,91 @@ export class ThorVGRenderer {
       });
 
       const shapes: TvgShapePool = {
+        evenOddRule: TVG.FillRule.EvenOdd,
         bg: new TVG.Shape(),
+        aurora: new TVG.Shape(),
         grid: new TVG.Shape(),
         waveFill: new TVG.Shape(),
         spectrum: new TVG.Shape(),
         waveGlow: new TVG.Shape(),
         waveCore: new TVG.Shape(),
-        platforms: new TVG.Shape(),
+        bandBass: new TVG.Shape(),
+        bandSynth: new TVG.Shape(),
+        bandTreble: new TVG.Shape(),
         gimmicks: new TVG.Shape(),
+        prismStars: new TVG.Shape(),
         timingRings: new TVG.Shape(),
-        orbs: new TVG.Shape(),
         traps: new TVG.Shape(),
         portals: new TVG.Shape(),
         effects: new TVG.Shape(),
         playerGlow: new TVG.Shape(),
         playerCore: new TVG.Shape(),
-        particles: new TVG.Shape(),
+        vfxGold: new TVG.Shape(),
+        vfxCyan: new TVG.Shape(),
+        vfxCrimson: new TVG.Shape(),
       };
       this.shapes = shapes;
 
+      // Configure hardware/software additive neon bloom (`BlendMethod.Add`) once at init (zero per-frame alloc!)
+      const addBlend = TVG.BlendMethod.Add;
+      shapes.aurora.blend(addBlend);
+      shapes.waveGlow.blend(addBlend);
+      shapes.timingRings.blend(addBlend);
+      shapes.playerGlow.blend(addBlend);
+      shapes.vfxGold.blend(addBlend);
+      shapes.vfxCyan.blend(addBlend);
+      shapes.vfxCrimson.blend(addBlend);
+
       this.ownedObjects.push(
         shapes.bg,
+        shapes.aurora,
         shapes.grid,
         shapes.waveFill,
         shapes.spectrum,
         shapes.waveGlow,
         shapes.waveCore,
-        shapes.platforms,
+        shapes.bandBass,
+        shapes.bandSynth,
+        shapes.bandTreble,
         shapes.gimmicks,
+        shapes.prismStars,
         shapes.timingRings,
-        shapes.orbs,
         shapes.traps,
         shapes.portals,
         shapes.effects,
         shapes.playerGlow,
         shapes.playerCore,
-        shapes.particles
+        shapes.vfxGold,
+        shapes.vfxCyan,
+        shapes.vfxCrimson
       );
 
       this.canvas
         .add(shapes.bg)
+        .add(shapes.aurora)
         .add(shapes.grid)
         .add(shapes.waveFill)
         .add(shapes.spectrum)
         .add(shapes.waveGlow)
         .add(shapes.waveCore)
-        .add(shapes.platforms)
+        .add(shapes.bandBass)
+        .add(shapes.bandSynth)
+        .add(shapes.bandTreble)
         .add(shapes.gimmicks)
+        .add(shapes.prismStars)
         .add(shapes.timingRings)
-        .add(shapes.orbs)
         .add(shapes.traps)
         .add(shapes.portals)
         .add(shapes.effects)
         .add(shapes.playerGlow)
         .add(shapes.playerCore);
 
-      // Character draws above its aura and below particles.
+      // Character draws above its aura and below multi-color additive VFX shards.
       this.loadCrewmate(TVG);
-      this.canvas.add(shapes.particles);
+      this.canvas
+        .add(shapes.vfxGold)
+        .add(shapes.vfxCyan)
+        .add(shapes.vfxCrimson);
 
       // Added last so it draws above everything while active.
       this.loadSplash(TVG);
@@ -286,20 +313,13 @@ export class ThorVGRenderer {
     if (!shapes) return;
     shapes.bg.reset().appendRect(0, 0, this.width, this.height).fill(0, 0, 0, 255);
     shapes.grid.reset();
-    shapes.waveFill.reset();
-    shapes.spectrum.reset();
-    shapes.waveGlow.reset();
-    shapes.waveCore.reset();
-    shapes.platforms.reset();
-    shapes.gimmicks.reset();
-    shapes.timingRings.reset();
-    shapes.orbs.reset();
-    shapes.traps.reset();
-    shapes.portals.reset();
+    resetWorldShapeLayers(shapes);
     shapes.effects.reset();
     shapes.playerGlow.reset();
     shapes.playerCore.reset();
-    shapes.particles.reset();
+    shapes.vfxGold.reset();
+    shapes.vfxCyan.reset();
+    shapes.vfxCrimson.reset();
     this.hideCrewmate();
   }
 
@@ -427,8 +447,10 @@ export class ThorVGRenderer {
     const zoom = state.zoomScale;
     const fx = state.focalScreenX;
     const fy = state.focalScreenY;
-    const tx = (x: number) => (zoom === 1 ? x : fx + (x - fx) * zoom);
-    const ty = (y: number) => (zoom === 1 ? y : fy + (y - fy) * zoom);
+    const sxOff = state.shakeX ?? 0;
+    const syOff = state.shakeY ?? 0;
+    const tx = (x: number) => (zoom === 1 ? x : fx + (x - fx) * zoom) + sxOff;
+    const ty = (y: number) => (zoom === 1 ? y : fy + (y - fy) * zoom) + syOff;
     const ts = (s: number) => s * Math.min(zoom, 8);
 
     // 1. Background
@@ -483,13 +505,39 @@ export class ThorVGRenderer {
       renderMacroWorldPass(shapes, state, tx, ty, ts);
     }
 
-    // 3. Shockwaves, Afterimage Trails & High-Speed Sprint Lines
+    // 3. Afterimage Trails, Speed Lines (`effects`) & 3-Color Additive Shockwaves + Diamond Shards (`vfx*`)
     shapes.effects.reset();
+    shapes.vfxGold.reset();
+    shapes.vfxCyan.reset();
+    shapes.vfxCrimson.reset();
+
     let hasEffects = false;
+    let hasGold = false;
+    let hasCyan = false;
+    let hasCrimson = false;
+
+    const pickVfxBucket = (rgb: [number, number, number]) => {
+      if (rgb[0] >= 200 && rgb[1] >= 180) {
+        hasGold = true;
+        return shapes.vfxGold;
+      }
+      if (rgb[2] >= 180 && rgb[0] < 160) {
+        hasCyan = true;
+        return shapes.vfxCyan;
+      }
+      hasCrimson = true;
+      return shapes.vfxCrimson;
+    };
+
     for (const sw of state.shockwaves) {
-      shapes.effects.appendCircle(tx(sw.x), ty(sw.y), ts(sw.radius), ts(sw.radius));
-      hasEffects = true;
+      const target = pickVfxBucket(sw.color);
+      const rOuter = ts(sw.radius);
+      const rInner = Math.max(2, rOuter - ts(3.2));
+      // Append thin ring path so fill() paints both shockwaves & diamond shards in one additive pass!
+      target.appendCircle(tx(sw.x), ty(sw.y), rOuter, rOuter);
+      target.appendCircle(tx(sw.x), ty(sw.y), rInner, rInner);
     }
+
     for (const ai of state.afterimages) {
       appendPolygonPath(
         shapes.effects,
@@ -501,28 +549,40 @@ export class ThorVGRenderer {
       );
       hasEffects = true;
     }
+
     const surfMomentum = state.surfMomentum ?? 0;
-    if (surfMomentum > 0.38 || state.isDashing || state.isGrinding) {
-      const lineCount = state.isDashing ? 9 : state.isGrinding ? 7 : Math.floor(surfMomentum * 7);
+    const isOverdrive = Boolean(state.overdriveActive);
+    if (isOverdrive || surfMomentum > 0.38 || state.isDashing || state.isGrinding) {
+      const lineCount = isOverdrive
+        ? 12
+        : state.isDashing
+          ? 9
+          : state.isGrinding
+            ? 7
+            : Math.floor(surfMomentum * 7);
       for (let i = 0; i < lineCount; i++) {
         const seed = (i * 197 + Math.floor(state.timeSec * 22)) % 100;
         const lx =
           ((width - ((state.timeSec * 1550 + i * 230) % (width + 260))) + width) % width;
         const ly = i % 2 === 0 ? 45 + (seed % 140) : height - 55 - (seed % 140);
-        const len = 70 + surfMomentum * 105;
+        const len = 70 + surfMomentum * 115;
         shapes.effects.moveTo(lx, ly).lineTo(lx + len, ly);
         hasEffects = true;
       }
     }
     if (hasEffects) {
-      shapes.effects.stroke({ width: 2.5, color: [fr, fg, fb, 185] });
+      shapes.effects.stroke({
+        width: isOverdrive ? 3.0 : 2.4,
+        color: isOverdrive ? [255, 232, 95, 210] : [fr, fg, fb, 185],
+      });
     }
 
-    // 4. Player Character (Crewmate Lottie + Resonance Aura, or Form Polygon fallback)
-    const isInvulnerable = state.invulnerableTimer > 0;
+    // 4. Player Character (Crewmate Lottie + Resonance Aura & Sacred Combo Halo, or Form Polygon fallback)
+    const isInvulnerable = state.invulnerableTimer > 0 && !isOverdrive;
     const px = tx(state.playerScreenX);
     const py = ty(state.playerScreenY);
     const pr = ts(state.playerRadius);
+    const combo = state.combo ?? 1;
     if (this.crewAnim) {
       const heightPx = pr * CREW_HEIGHT_RATIO;
       const cx = px;
@@ -545,7 +605,10 @@ export class ThorVGRenderer {
         rotation,
         activeForm,
         isInvulnerable ? 0.55 : 1.0,
-        true
+        true,
+        combo,
+        state.timeSec,
+        isOverdrive
       );
       const blink = isInvulnerable && Math.floor(state.timeSec * 12) % 2 === 0;
       this.drawCrewmate(cx, cy, heightPx, rotation, flip, state.runCycleTime, blink ? 90 : 255);
@@ -558,18 +621,44 @@ export class ThorVGRenderer {
         pr,
         state.playerRotation,
         activeForm,
-        isInvulnerable ? 0.55 : 1.0
+        isInvulnerable ? 0.55 : 1.0,
+        false,
+        combo,
+        state.timeSec,
+        isOverdrive
       );
     }
 
-    // 5. Vector Particles
-    shapes.particles.reset();
+    // 5. Crisp 4-Point Vector Diamond Shards routed into 3-Color Additive VFX Buckets
     for (const pt of state.particles) {
-      const rad = Math.max(1.5, pt.radius);
-      shapes.particles.appendCircle(tx(pt.x), ty(pt.y), rad, rad);
+      const target = pickVfxBucket(pt.color);
+      const rad = Math.max(2.0, pt.radius * 1.25);
+      const sx = tx(pt.x);
+      const sy = ty(pt.y);
+      target
+        .moveTo(sx, sy - rad * 1.35)
+        .lineTo(sx + rad, sy)
+        .lineTo(sx, sy + rad * 1.35)
+        .lineTo(sx - rad, sy)
+        .close();
     }
-    if (state.particles.length > 0) {
-      shapes.particles.fill(fr, fg, fb, 215);
+    if (hasGold) {
+      shapes.vfxGold
+        .fillRule(shapes.evenOddRule)
+        .fill(255, 230, 65, 220)
+        .stroke({ width: 1.4, color: [255, 250, 190, 235] });
+    }
+    if (hasCyan) {
+      shapes.vfxCyan
+        .fillRule(shapes.evenOddRule)
+        .fill(5, 213, 255, 220)
+        .stroke({ width: 1.4, color: [195, 248, 255, 235] });
+    }
+    if (hasCrimson) {
+      shapes.vfxCrimson
+        .fillRule(shapes.evenOddRule)
+        .fill(255, 45, 108, 220)
+        .stroke({ width: 1.4, color: [255, 200, 220, 235] });
     }
 
     this.canvas.update().render();

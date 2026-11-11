@@ -1,4 +1,4 @@
-import type { Shape as TvgShape } from '@thorvg/webcanvas';
+import type { Shape as TvgShape, ThorVGNamespace } from '@thorvg/webcanvas';
 
 /**
  * Pooled ThorVG WASM Shape Layer Bundle:
@@ -6,20 +6,46 @@ import type { Shape as TvgShape } from '@thorvg/webcanvas';
  * and passed into stateless 60fps render passes so zero WASM heap objects are created per frame.
  */
 export interface TvgShapePool {
+  evenOddRule: ThorVGNamespace['FillRule']['EvenOdd'];
   bg: TvgShape;
+  aurora: TvgShape;
   grid: TvgShape;
   waveFill: TvgShape;
   spectrum: TvgShape;
   waveGlow: TvgShape;
   waveCore: TvgShape;
-  platforms: TvgShape;
+  bandBass: TvgShape;
+  bandSynth: TvgShape;
+  bandTreble: TvgShape;
   gimmicks: TvgShape;
+  prismStars: TvgShape;
   timingRings: TvgShape;
-  orbs: TvgShape;
   traps: TvgShape;
   portals: TvgShape;
   effects: TvgShape;
   playerGlow: TvgShape;
   playerCore: TvgShape;
-  particles: TvgShape;
+  vfxGold: TvgShape;
+  vfxCyan: TvgShape;
+  vfxCrimson: TvgShape;
+}
+
+/**
+ * Resets all world & VFX shape layers so phase switches (`MACRO` <-> `MICRO` <-> `Preview`)
+ * never leave stale vector paths on screen.
+ */
+export function resetWorldShapeLayers(shapes: TvgShapePool): void {
+  shapes.aurora.reset();
+  shapes.waveFill.reset();
+  shapes.spectrum.reset();
+  shapes.waveGlow.reset();
+  shapes.waveCore.reset();
+  shapes.bandBass.reset();
+  shapes.bandSynth.reset();
+  shapes.bandTreble.reset();
+  shapes.gimmicks.reset();
+  shapes.prismStars.reset();
+  shapes.timingRings.reset();
+  shapes.traps.reset();
+  shapes.portals.reset();
 }

@@ -1,5 +1,5 @@
 import { FORM_CONFIG, type RenderFrameState } from '../../types/game';
-import type { TvgShapePool } from './shapePool';
+import { resetWorldShapeLayers, type TvgShapePool } from './shapePool';
 
 /**
  * Stateless Phase 2 (Micro View) Render Pass:
@@ -24,14 +24,7 @@ export function renderMicroTunnelPass(shapes: TvgShapePool, state: RenderFrameSt
   const steps = 24;
   const stepW = width / steps;
 
-  shapes.waveFill.reset();
-  shapes.spectrum.reset();
-  shapes.waveGlow.reset();
-  shapes.waveCore.reset();
-  shapes.platforms.reset();
-  shapes.gimmicks.reset();
-  shapes.timingRings.reset();
-  shapes.orbs.reset();
+  resetWorldShapeLayers(shapes);
 
   const upperWallBase = height * 0.16;
   const lowerWallBase = height * 0.84;
@@ -63,11 +56,9 @@ export function renderMicroTunnelPass(shapes: TvgShapePool, state: RenderFrameSt
     .moveTo(0, bottomLaneY)
     .lineTo(width, bottomLaneY);
 
-  shapes.waveGlow.stroke({ width: 5, color: [mr, mg, mb, 110] });
+  shapes.waveGlow.stroke({ width: 5, color: [mr, mg, mb, 120] });
   shapes.waveCore.stroke({ width: 2.5, color: [255, 255, 255, 235] });
 
-  shapes.traps.reset();
-  shapes.portals.reset();
   let hasBarriers = false;
   let hasPulses = false;
 
