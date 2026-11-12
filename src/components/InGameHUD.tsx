@@ -14,6 +14,7 @@ interface InGameHUDProps {
   onPause: () => void;
   onStepZoom: (factor: number) => void;
   onResetZoom: () => void;
+  onToggleCinematicCamera: () => void;
   onToggleRendererInGame: (next: RendererMode) => void;
   onCycleSfxMode: () => void;
   onActivateOverdrive: () => void;
@@ -25,6 +26,7 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
   onPause,
   onStepZoom,
   onResetZoom,
+  onToggleCinematicCamera,
   onToggleRendererInGame,
   onCycleSfxMode,
   onActivateOverdrive,
@@ -117,8 +119,11 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
             {t.hud.styleLabel}:{' '}
             <strong style={{ color: formCfg.colorHex }}>{formText.name}</strong>
           </span>
-          <span>
-            ZOOM: <strong>{zoomDisplayText}x</strong>
+          <span
+            className={`cine-zoom-readout${hud.cinematicCamera ? ' active' : ''}`}
+            data-testid="hud-effective-zoom"
+          >
+            {hud.cinematicCamera ? '🎬' : 'ZOOM:'} <strong>{zoomDisplayText}x</strong>
           </span>
           <span className="pure-audio-pill">🎵 {t.hud.pureAudio}</span>
           <span className={`section-pill ${intensity}`}>{sectionLabel}</span>
@@ -204,6 +209,15 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
             onClick={onResetZoom}
           >
             {t.hud.zoomReset}
+          </button>
+          <button
+            type="button"
+            data-testid="hud-cinematic-btn"
+            className={`hud-btn hud-cinematic-btn${hud.cinematicCamera ? ' active' : ''}`}
+            title={t.hud.cinematicTitle}
+            onClick={onToggleCinematicCamera}
+          >
+            {hud.cinematicCamera ? t.hud.cinematicAuto : t.hud.cinematicFixed}
           </button>
         </div>
 

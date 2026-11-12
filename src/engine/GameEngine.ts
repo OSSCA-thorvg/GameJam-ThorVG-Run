@@ -131,6 +131,19 @@ export class GameEngine {
   private hasManualPan: boolean = false;
   private pausedRenderRaf: number = 0;
 
+  // Dynamic Vector Cinematic Camera & Render-Space Hitstop State
+  private cinematicCamera: boolean = true;
+  private cinematicZoom: number = 1.0;
+  private impactZoomPunch: number = 0;
+  private hitstopTimer: number = 0;
+  private hitstopCooldownTimer: number = 0;
+  private hitstopFreezeCameraX: number = 0;
+  private hitstopFreezePlayerY: number = 0;
+  private hitstopFreezeRunCycle: number = 0;
+  private visualLagX: number = 0;
+  private visualLagY: number = 0;
+  private prevRenderCameraX: number = 0;
+
   constructor(audio: AudioEngine, onHudUpdate: (hud: HUDTelemetry) => void) {
     this.audio = audio;
     this.terrain = new BezierTerrain();
@@ -201,6 +214,33 @@ export class GameEngine {
     return next;
   }
 
+  public setCinematicCamera(enabled: boolean): void {
+    this.cinematicCamera = enabled;
+    this.hudDirty = true;
+    if (this.running && this.paused) {
+      this.cinematicZoom = enabled
+        ? this.computeCinematicTargets(this.pausedAudioSec).targetCineZoom
+        : 1.0;
+      if (!this.hasManualPan) {
+        this.applyNeutralPausedFraming(this.userZoom);
+      } else {
+        this.clampPausedPan();
+      }
+      this.refreshPausedView(true);
+    } else if (!this.running) {
+      this.cinematicZoom = 1.0;
+    }
+  }
+
+  public getCinematicCamera(): boolean {
+    return this.cinematicCamera;
+  }
+
+  public toggleCinematicCamera(): boolean {
+    this.setCinematicCamera(!this.cinematicCamera);
+    return this.cinematicCamera;
+  }
+
   public activateOverdrive(): boolean {
     if (
       !this.running ||
@@ -221,13 +261,29 @@ export class GameEngine {
     this.hudDirty = true;
 
     const sx = this.getPlayerScreenX();
+    const sy = this.getRenderPlayerY();
     this.audio.sfx.playOverdriveBurst();
+    this.audio.sfx.playBladeSlash();
+    this.triggerHitstop(0.03, 0.075);
     this.triggerScreenShake(0.32, 9.5);
-    this.vfx.spawnShockwave(sx, this.playerY, 24, 340, [255, 230, 0], 1.0);
-    this.vfx.spawnShockwave(sx, this.playerY, 16, 220, FORM_CONFIG[this.activeForm].rgb, 0.95);
-    this.vfx.spawnBurst(sx, this.playerY, [255, 230, 0], 26);
+    this.vfx.spawnSlash(sx, sy, -0.42, 230, 18, [255, 230, 0], 'cross', 0.22);
+    this.vfx.spawnShockwave(sx, sy, 24, 340, [255, 230, 0], 1.0);
+    this.vfx.spawnShockwave(sx, sy, 16, 220, FORM_CONFIG[this.activeForm].rgb, 0.95);
+    this.vfx.spawnBurst(sx, sy, [255, 230, 0], 26);
     this.setBanner({ key: 'overdriveActivate' }, 2.4);
     return true;
+  }
+
+  private triggerHitstop(durationSec: number, zoomPunch: number): void {
+    this.impactZoomPunch = Math.min(0.11, Math.max(this.impactZoomPunch, zoomPunch));
+    if (this.hitstopCooldownTimer > 0 || this.hitstopTimer > 0) return;
+    const curRenderCamX = this.getRenderCameraX();
+    const curRenderPy = this.getRenderPlayerY();
+    this.hitstopTimer = durationSec;
+    this.hitstopCooldownTimer = 0.14;
+    this.hitstopFreezeCameraX = curRenderCamX;
+    this.hitstopFreezePlayerY = curRenderPy;
+    this.hitstopFreezeRunCycle = this.runCycleTime;
   }
 
   private triggerScreenShake(durationSec: number, intensityPx: number): void {
@@ -320,6 +376,12 @@ export class GameEngine {
     this.hasManualPan = false;
     this.isDiveHeld = false;
     this.isJumpHeld = false;
+    this.hitstopTimer = 0;
+    this.hitstopCooldownTimer = 0;
+    this.visualLagX = 0;
+    this.visualLagY = 0;
+    this.prevRenderCameraX = this.cameraX;
+    this.impactZoomPunch = 0;
     cancelAnimationFrame(this.rafId);
     cancelAnimationFrame(this.pausedRenderRaf);
     this.pausedRenderRaf = 0;
@@ -330,6 +392,57 @@ export class GameEngine {
     return this.width * this.hitXRatio;
   }
 
+  private getRenderCameraX(): number {
+    return this.hitstopTimer > 0 ? this.hitstopFreezeCameraX : this.cameraX - this.visualLagX;
+  }
+
+  private getRenderPlayerY(): number {
+    return this.hitstopTimer > 0 ? this.hitstopFreezePlayerY : this.playerY - this.visualLagY;
+  }
+
+  private getRenderRunCycleTime(): number {
+    return this.hitstopTimer > 0 ? this.hitstopFreezeRunCycle : this.runCycleTime;
+  }
+
+  private computeCinematicTargets(audioSec: number): {
+    targetCineZoom: number;
+    targetHitXRatio: number;
+  } {
+    const lookaheadWorldX = Math.max(0, audioSec) * this.baseSpeed + this.baseSpeed * 0.65;
+    const lookaheadIntensity = this.terrain.getSectionIntensityAt(lookaheadWorldX);
+    if (!this.cinematicCamera) {
+      return {
+        targetCineZoom: 1.0,
+        targetHitXRatio:
+          this.overdriveTimer > 0
+            ? 0.29
+            : this.currentSectionIntensity === 'drop'
+              ? 0.265
+              : PLAYER_HIT_X_RATIO,
+      };
+    }
+    if (this.currentSectionIntensity === 'drop' || lookaheadIntensity === 'drop') {
+      return {
+        targetCineZoom: this.overdriveTimer > 0 ? 0.78 : 0.74,
+        targetHitXRatio: this.overdriveTimer > 0 ? 0.285 : 0.265,
+      };
+    }
+    if (
+      this.currentSectionIntensity === 'calm' &&
+      lookaheadIntensity === 'calm' &&
+      this.overdriveTimer <= 0
+    ) {
+      return {
+        targetCineZoom: 1.42,
+        targetHitXRatio: 0.205,
+      };
+    }
+    return {
+      targetCineZoom: 1.0,
+      targetHitXRatio: PLAYER_HIT_X_RATIO,
+    };
+  }
+
   private getPhaseBaseZoom(): number {
     const punchScale =
       this.overdriveTimer > 0
@@ -337,7 +450,11 @@ export class GameEngine {
         : this.currentSectionIntensity === 'drop'
           ? 0.044
           : 0.028;
-    return 1.0 + this.beatPulse * punchScale;
+    const beatAdd = this.beatPulse * punchScale;
+    return Math.max(
+      0.55,
+      Math.min(2.2, this.cinematicZoom * (1.0 + beatAdd + this.impactZoomPunch))
+    );
   }
 
   private getEffectiveZoomScale(): number {
@@ -345,7 +462,10 @@ export class GameEngine {
   }
 
   private getLiveFocalPoint(): { fx: number; fy: number } {
-    return { fx: this.getPlayerScreenX(), fy: this.playerY };
+    const wideBlend = Math.max(0, Math.min(1, (1.0 - this.cinematicZoom) / 0.26));
+    const py = this.getRenderPlayerY();
+    const fy = py + (this.height * 0.54 - py) * (wideBlend * 0.42);
+    return { fx: this.getPlayerScreenX(), fy };
   }
 
   private getEffectiveFocalPoint(): { fx: number; fy: number } {
@@ -375,6 +495,23 @@ export class GameEngine {
     };
   }
 
+  private applyNeutralPausedFraming(zoom: number): void {
+    const cx = this.width * 0.5;
+    const cy = this.height * 0.5;
+    const z2 = Math.max(0.05, this.getEffectiveZoomScale());
+    const { fx: fx0, fy: fy0 } = this.getLiveFocalPoint();
+    const blend = zoom <= 1 ? 0 : Math.min(1, (zoom - 1) / 3);
+    const renderPy = this.getRenderPlayerY();
+    const playerSubjY = renderPy + this.playerRadius * 0.65;
+    const uSubj = fx0;
+    const vSubj = fy0 + (playerSubjY - fy0) * blend;
+    const targetSx = fx0 + (cx - fx0) * blend;
+    const targetSy = fy0 + (Math.max(renderPy, this.height * 0.73) - fy0) * blend;
+    this.panX = uSubj - cx - (targetSx - cx) / z2;
+    this.panY = vSubj - cy - (targetSy - cy) / z2;
+    this.clampPausedPan();
+  }
+
   private clampPausedPan(): void {
     const cx = this.width * 0.5;
     const totalWorldX = Math.max(
@@ -394,12 +531,16 @@ export class GameEngine {
     const uRight = this.panX + fx + (this.width - fx) / zEff;
     const pad = Math.max(this.baseSpeed * 0.16, 220);
 
-    let minX = this.cameraX + Math.min(uLeft, uRight) - pad;
-    let maxX = this.cameraX + Math.max(uLeft, uRight) + pad;
+    const renderCamX = this.getRenderCameraX();
+    const minCamX = Math.min(this.cameraX, renderCamX);
+    const maxCamX = Math.max(this.cameraX, renderCamX);
+
+    let minX = minCamX + Math.min(uLeft, uRight) - pad;
+    let maxX = maxCamX + Math.max(uLeft, uRight) + pad;
 
     if (includePhysicsUnion) {
-      minX = Math.min(minX, this.cameraX - 160);
-      maxX = Math.max(maxX, this.cameraX + this.width + 320);
+      minX = Math.min(minX, minCamX - 160);
+      maxX = Math.max(maxX, maxCamX + this.width + 320);
     }
 
     return { minX, maxX };
@@ -411,6 +552,11 @@ export class GameEngine {
 
   public pauseRun(): void {
     if (!this.running || this.paused || this.finishRecorded) return;
+    this.hitstopTimer = 0;
+    this.hitstopCooldownTimer = 0;
+    this.visualLagX = 0;
+    this.visualLagY = 0;
+    this.prevRenderCameraX = this.cameraX;
     this.pauseSeq++;
 
     this.pausedFreq = this.audio.getFrequencyData();
@@ -446,6 +592,11 @@ export class GameEngine {
     }
 
     this.paused = false;
+    this.hitstopTimer = 0;
+    this.hitstopCooldownTimer = 0;
+    this.visualLagX = 0;
+    this.visualLagY = 0;
+    this.prevRenderCameraX = this.cameraX;
     this.panX = 0;
     this.panY = 0;
     this.hasManualPan = false;
@@ -508,16 +659,7 @@ export class GameEngine {
 
       if (anchorScreenX === undefined && anchorScreenY === undefined && !this.hasManualPan) {
         this.userZoom = clamped;
-        const z2 = Math.max(0.05, this.getEffectiveZoomScale());
-        const { fx: fx0, fy: fy0 } = this.getLiveFocalPoint();
-        const blend = clamped <= 1 ? 0 : Math.min(1, (clamped - 1) / 3);
-        const uSubj = fx0;
-        const vSubj = fy0 + this.playerRadius * 0.65 * blend;
-        const targetSx = fx0 + (cx - fx0) * blend;
-        const targetSy = fy0 + (Math.max(fy0, this.height * 0.73) - fy0) * blend;
-        this.panX = uSubj - cx - (targetSx - cx) / z2;
-        this.panY = vSubj - cy - (targetSy - cy) / z2;
-        this.clampPausedPan();
+        this.applyNeutralPausedFraming(clamped);
         this.schedulePausedRender();
       } else {
         const z1 = Math.max(0.05, this.getEffectiveZoomScale());
@@ -629,12 +771,21 @@ export class GameEngine {
     this.lastIsNewRecord = false;
     this.lastScoreDelta = 0;
     this.hitXRatio = PLAYER_HIT_X_RATIO;
+    this.cinematicZoom = 1.0;
+    this.impactZoomPunch = 0;
     this.baseSpeed =
       this.activeBlueprint?.worldPxPerSec ?? DIFFICULTY_CONFIG[this.difficulty].worldPxPerSec;
 
     const playerScreenX = this.getPlayerScreenX();
     // At audioSec = 0, playerWorldX = cameraX + playerScreenX === 0!
     this.cameraX = -playerScreenX;
+    this.hitstopTimer = 0;
+    this.hitstopCooldownTimer = 0;
+    this.hitstopFreezeCameraX = this.cameraX;
+    this.hitstopFreezeRunCycle = 0;
+    this.visualLagX = 0;
+    this.visualLagY = 0;
+    this.prevRenderCameraX = this.cameraX;
 
     if (this.activeBlueprint) {
       this.terrain.loadBlueprint(this.activeBlueprint, this.width, this.height);
@@ -647,6 +798,7 @@ export class GameEngine {
 
     const { floorY } = this.terrain.sampleFloor(0);
     this.playerY = floorY - this.playerRadius;
+    this.hitstopFreezePlayerY = this.playerY;
     this.playerVy = 0;
     this.playerRotation = 0;
     this.isGrounded = true;
@@ -887,7 +1039,7 @@ export class GameEngine {
       } else {
         this.dashCooldown = profile.dashCooldownSec;
         this.hudDirty = true;
-        this.triggerBassShockwave(playerScreenX, this.playerY, playerWorldX);
+        this.triggerBassShockwave(playerScreenX, this.getRenderPlayerY(), playerWorldX);
       }
       return;
     }
@@ -962,6 +1114,19 @@ export class GameEngine {
     const freq = this.audio.getFrequencyData();
     const audioSec = this.audio.getElapsedSec();
 
+    if (this.hitstopCooldownTimer > 0) {
+      this.hitstopCooldownTimer = Math.max(0, this.hitstopCooldownTimer - dt);
+    }
+    if (this.hitstopTimer > 0) {
+      this.hitstopTimer = Math.max(0, this.hitstopTimer - dt);
+    } else {
+      const lagDecay = Math.exp(-dt * 42);
+      const nextLagX = this.visualLagX * lagDecay;
+      const nextLagY = this.visualLagY * lagDecay;
+      this.visualLagX = Math.abs(nextLagX) < 0.05 ? 0 : nextLagX;
+      this.visualLagY = Math.abs(nextLagY) < 0.05 ? 0 : nextLagY;
+    }
+
     if (this.statusBannerTimer > 0) {
       this.statusBannerTimer = Math.max(0, this.statusBannerTimer - dt);
       if (this.statusBannerTimer === 0 && this.statusBanner !== null) {
@@ -1003,15 +1168,6 @@ export class GameEngine {
       );
     }
 
-    // Forward hit-line surge during OVERDRIVE (0.30W) and DROP (0.265W), keeping 0.0ms beat sync!
-    const targetHitRatio =
-      this.overdriveTimer > 0
-        ? 0.3
-        : this.currentSectionIntensity === 'drop'
-          ? 0.265
-          : PLAYER_HIT_X_RATIO;
-    this.hitXRatio += (targetHitRatio - this.hitXRatio) * Math.min(1, dt * 4.5);
-
     const profile = this.playerController.profile;
     let speedMultiplier = 1.0 + this.surfMomentum * 0.65 + freq.overall * 0.15;
     if (this.overdriveTimer > 0) {
@@ -1030,10 +1186,17 @@ export class GameEngine {
     }
     this.lastSpeedMultiplier = speedMultiplier;
 
+    // 0.65s Lookahead Dynamic Vector Cinematic Framing (unified hitXRatio + cinematicZoom, 0.0ms beat sync!)
+    const { targetCineZoom, targetHitXRatio } = this.computeCinematicTargets(audioSec);
+    this.hitXRatio += (targetHitXRatio - this.hitXRatio) * (1 - Math.exp(-dt * 3.2));
+    const cineRate = targetCineZoom < this.cinematicZoom ? 4.8 : 2.2;
+    this.cinematicZoom += (targetCineZoom - this.cinematicZoom) * (1 - Math.exp(-dt * cineRate));
+    this.impactZoomPunch *= Math.exp(-dt * 18);
+    if (this.impactZoomPunch < 0.0005) this.impactZoomPunch = 0;
+
     const playerScreenX = this.getPlayerScreenX();
     // Exact 0.0ms synchronization: advance by baseSpeed * dt first, then correct residual clock drift!
     const targetCameraX = audioSec * this.baseSpeed - playerScreenX;
-    const prevCameraX = this.cameraX;
     if (this.audio.playing) {
       const predictedCameraX = this.cameraX + this.baseSpeed * dt;
       const drift = targetCameraX - predictedCameraX;
@@ -1045,7 +1208,6 @@ export class GameEngine {
     } else {
       this.cameraX += this.baseSpeed * dt;
     }
-    const stepX = Math.max(0, this.cameraX - prevCameraX);
 
     if (this.isGrounded || this.isGrinding) {
       this.runCycleTime += dt * speedMultiplier * 1.12;
@@ -1062,9 +1224,21 @@ export class GameEngine {
       this.computeViewWorldBounds(true)
     );
 
+    if (this.hitstopTimer > 0) {
+      this.visualLagX = this.cameraX - this.hitstopFreezeCameraX;
+      this.visualLagY = this.playerY - this.hitstopFreezePlayerY;
+    }
+    const preMacroRenderCamX = this.getRenderCameraX();
+    const renderStepX = Math.max(0, preMacroRenderCamX - this.prevRenderCameraX);
+    this.vfx.update(dt, renderStepX);
+
     this.updateMacroPhase(dt, playerScreenX, playerWorldX, audioSec, speedMultiplier);
 
-    this.vfx.update(dt, stepX);
+    if (this.hitstopTimer > 0) {
+      this.visualLagX = this.cameraX - this.hitstopFreezeCameraX;
+      this.visualLagY = this.playerY - this.hitstopFreezePlayerY;
+    }
+    this.prevRenderCameraX = this.getRenderCameraX();
 
     this.renderCurrentState(audioSec, freq);
 
@@ -1117,6 +1291,10 @@ export class GameEngine {
       shakeX = Math.sin(this.elapsedSec * 67) * this.shakeIntensity * decay;
       shakeY = Math.cos(this.elapsedSec * 53) * this.shakeIntensity * decay;
     }
+    if (this.hitstopTimer > 0 && !this.paused) {
+      shakeX += Math.sin(this.elapsedSec * 190) * 2.4;
+      shakeY += Math.cos(this.elapsedSec * 163) * 1.8;
+    }
 
     this.renderer?.renderGameFrame({
       width: this.width,
@@ -1131,7 +1309,7 @@ export class GameEngine {
       shakeX,
       shakeY,
       zoomScale: effectiveZoomScale,
-      cameraX: this.cameraX,
+      cameraX: this.getRenderCameraX(),
       focalScreenX: effectiveFocalX,
       focalScreenY: effectiveFocalY,
       panX: this.panX,
@@ -1147,7 +1325,7 @@ export class GameEngine {
       holdRails: this.terrain.getHoldRails(),
       traps: this.terrain.getTraps(),
       playerScreenX,
-      playerScreenY: this.playerY,
+      playerScreenY: this.getRenderPlayerY(),
       playerRotation: this.playerRotation,
       playerRadius: this.playerRadius,
       isDashing: this.dashTimer > 0 || this.airBoostTimer > 0 || this.strikeTimer > 0,
@@ -1156,10 +1334,11 @@ export class GameEngine {
       surfMomentum: this.surfMomentum,
       sectionIntensity: this.currentSectionIntensity,
       invulnerableTimer: this.invulnerableTimer,
-      runCycleTime: this.runCycleTime,
+      runCycleTime: this.getRenderRunCycleTime(),
       shockwaves: this.vfx.getShockwaves(),
       afterimages: this.vfx.getAfterimages(),
       particles: this.vfx.getParticles(),
+      slashes: this.vfx.getSlashes(),
     });
   }
 
@@ -1187,6 +1366,7 @@ export class GameEngine {
       sfxMode: this.audio.getSfxMode(),
       fps: this.currentFps,
       zoomDisplay: Number(this.getEffectiveZoomScale().toFixed(2)),
+      cinematicCamera: this.cinematicCamera,
       score: Math.floor(this.scoreJudge.score),
       combo: this.scoreJudge.combo,
       maxCombo: this.scoreJudge.maxCombo,
@@ -1345,7 +1525,7 @@ export class GameEngine {
           this.vfx.spawnBurst(playerScreenX, platY, FORM_CONFIG[skyPlat.band].secondaryRgb, 8);
           if (this.activeForm === 'bass' && this.slamActive) {
             this.slamActive = false;
-            this.triggerBassShockwave(playerScreenX, this.playerY, playerWorldX);
+            this.triggerBassShockwave(playerScreenX, this.getRenderPlayerY(), playerWorldX);
           }
         }
         this.slamActive = false;
@@ -1376,7 +1556,7 @@ export class GameEngine {
 
           if (wasAirborne && this.activeForm === 'bass' && this.slamActive) {
             this.slamActive = false;
-            this.triggerBassShockwave(playerScreenX, this.playerY, playerWorldX);
+            this.triggerBassShockwave(playerScreenX, this.getRenderPlayerY(), playerWorldX);
           }
           this.slamActive = false;
         } else {
@@ -1451,9 +1631,14 @@ export class GameEngine {
             this.playerVy = -895;
             this.addResonanceGauge(14);
             this.audio.sfx.playSlamImpact();
+            this.audio.sfx.playBladeSlash();
+            this.triggerHitstop(0.034, 0.08);
             this.triggerScreenShake(0.26, 8.5);
-            this.vfx.spawnShockwave(playerScreenX, padY, 22, 310, [255, 210, 50], 1.0);
-            this.vfx.spawnBurst(playerScreenX, padY, [255, 230, 0], 22);
+            const renderCamX = this.getRenderCameraX();
+            const padScreenX = pad.worldX - renderCamX;
+            this.vfx.spawnSlash(padScreenX, padY - 8, 0, 210, 17, [255, 42, 109], 'slam', 0.2);
+            this.vfx.spawnShockwave(padScreenX, padY, 22, 310, [255, 210, 50], 1.0);
+            this.vfx.spawnBurst(padScreenX, padY, [255, 230, 0], 22);
             // Shatter nearby hazards with the SlamPad shockwave!
             let slamShattered = 0;
             for (const trap of this.terrain.getTraps()) {
@@ -1465,6 +1650,26 @@ export class GameEngine {
                 trap.destroyed = true;
                 slamShattered++;
                 this.scoreJudge.recordTrapDestroyed();
+                const baseFloorY =
+                  trap.screenFloorY ??
+                  (trap.isAerialDrone
+                    ? this.terrain.sampleFloor(trap.worldX).floorY - 72
+                    : this.terrain.sampleFloor(trap.worldX).floorY);
+                const trapScreenX = trap.worldX - renderCamX;
+                const trapCenterY = trap.isAerialDrone
+                  ? baseFloorY
+                  : baseFloorY - trap.height * 0.5;
+                this.vfx.spawnSlash(
+                  trapScreenX,
+                  trapCenterY,
+                  -0.35,
+                  115,
+                  10,
+                  [255, 42, 109],
+                  'cross',
+                  0.15
+                );
+                this.vfx.spawnBurst(trapScreenX, trapCenterY, [255, 42, 109], 10);
               }
             }
             if (slamShattered > 0 && this.activeForm === 'bass') {
@@ -1581,11 +1786,24 @@ export class GameEngine {
             this.jumpsRemaining = this.playerController.profile.maxJumps;
             this.addResonanceGauge(this.activeForm === 'bass' ? 16 : 10);
             this.audio.sfx.playHazardShatter();
+            this.audio.sfx.playBladeSlash();
+            this.triggerHitstop(0.032, 0.072);
             this.triggerScreenShake(0.18, 6.0);
-            this.vfx.spawnShockwave(playerScreenX, droneY, 16, 155, [5, 213, 255], 1.0);
-            this.vfx.spawnBurst(playerScreenX, droneY, [255, 42, 109], 20);
+            const droneScreenX = trap.worldX - this.getRenderCameraX();
+            this.vfx.spawnSlash(
+              droneScreenX,
+              droneY,
+              -0.48,
+              185,
+              15,
+              FORM_CONFIG[this.activeForm].rgb,
+              'cross',
+              0.19
+            );
+            this.vfx.spawnShockwave(droneScreenX, droneY, 16, 155, [5, 213, 255], 1.0);
+            this.vfx.spawnBurst(droneScreenX, droneY, [255, 42, 109], 20);
             const droneBasePts = this.activeForm === 'bass' ? 425 : 340;
-            this.emitJudgment('PERFECT', playerScreenX, droneY, 0, droneBasePts, 0, true);
+            this.emitJudgment('PERFECT', droneScreenX, droneY, 0, droneBasePts, 0, true);
             this.setBanner({ key: 'droneShatter' }, 1.25);
           } else if (this.invulnerableTimer <= 0) {
             trap.destroyed = true;
@@ -1629,10 +1847,24 @@ export class GameEngine {
               this.addResonanceGauge(6);
             }
             this.audio.sfx.playHazardShatter();
+            this.audio.sfx.playBladeSlash();
+            this.triggerHitstop(0.028, 0.058);
             this.triggerScreenShake(0.16, 5.5);
-            this.vfx.spawnBurst(playerScreenX, trapFloorY - 20, [255, 230, 0], 14);
+            const trapScreenX = trap.worldX - this.getRenderCameraX();
+            const trapCenterY = trapFloorY - trap.height * 0.5;
+            this.vfx.spawnSlash(
+              trapScreenX,
+              trapCenterY,
+              -0.12,
+              175,
+              13,
+              [255, 230, 0],
+              'pierce',
+              0.16
+            );
+            this.vfx.spawnBurst(trapScreenX, trapCenterY, [255, 230, 0], 14);
             const trapBasePts = this.activeForm === 'bass' ? 375 : 300;
-            this.emitJudgment('PERFECT', playerScreenX, trapFloorY - 20, 0, trapBasePts, 0);
+            this.emitJudgment('PERFECT', playerScreenX, trapCenterY, 0, trapBasePts, 0);
           } else if (this.invulnerableTimer <= 0) {
             trap.destroyed = true;
             this.invulnerableTimer = 1.1;
@@ -1655,6 +1887,17 @@ export class GameEngine {
   ): void {
     this.audio.sfx.playSlamImpact();
     this.triggerScreenShake(0.22, 7.0);
+    const renderCamX = this.getRenderCameraX();
+    this.vfx.spawnSlash(
+      screenX + 55,
+      screenY - 6,
+      0,
+      220,
+      18,
+      FORM_CONFIG.bass.rgb,
+      'slam',
+      0.2
+    );
     this.vfx.spawnShockwave(screenX, screenY, 24, 360, FORM_CONFIG.bass.rgb, 1.0);
     this.vfx.spawnBurst(screenX, screenY, FORM_CONFIG.bass.rgb, 20);
 
@@ -1667,13 +1910,35 @@ export class GameEngine {
       ) {
         trap.destroyed = true;
         shattered++;
+        const baseFloorY =
+          trap.screenFloorY ??
+          (trap.isAerialDrone
+            ? this.terrain.sampleFloor(trap.worldX).floorY - 72
+            : this.terrain.sampleFloor(trap.worldX).floorY);
+        const trapScreenX = trap.worldX - renderCamX;
+        const trapCenterY = trap.isAerialDrone ? baseFloorY : baseFloorY - trap.height * 0.5;
+        this.vfx.spawnSlash(
+          trapScreenX,
+          trapCenterY,
+          -0.35,
+          115,
+          10,
+          FORM_CONFIG.bass.rgb,
+          'cross',
+          0.15
+        );
+        this.vfx.spawnBurst(trapScreenX, trapCenterY, FORM_CONFIG.bass.rgb, 10);
       }
     }
     if (shattered > 0) {
       this.scoreJudge.recordTrapDestroyed(shattered);
       this.addResonanceGauge(6 * shattered);
       this.audio.sfx.playHazardShatter();
+      this.audio.sfx.playBladeSlash();
+      this.triggerHitstop(0.032, 0.075);
       this.emitJudgment('PERFECT', screenX, screenY, 0, 350 * shattered, 0);
+    } else {
+      this.impactZoomPunch = Math.max(this.impactZoomPunch, 0.035);
     }
     this.setBanner(
       shattered > 0

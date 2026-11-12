@@ -8,6 +8,7 @@ export interface GameInputCommands {
   onSecondaryPress: () => void;
   onActivateOverdrive?: () => void;
   onCycleSfxMode?: () => void;
+  onToggleCinematicCamera?: () => void;
   onTogglePause: () => void;
   onExitToMenu: () => void;
   onWheelZoom: (factor: number, canvasX: number, canvasY: number) => void;
@@ -91,6 +92,12 @@ export class InputController {
         if (e.code === 'KeyM' && !e.repeat) {
           this.commands.onCycleSfxMode?.();
         }
+        return;
+      }
+
+      if (e.code === 'KeyC' && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        this.commands.onToggleCinematicCamera?.();
         return;
       }
 

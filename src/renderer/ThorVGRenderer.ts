@@ -3,6 +3,7 @@ import ThorVG, {
   type Animation as TvgAnimation,
   type AnimationInfo,
   type Canvas as TvgCanvas,
+  type Shape as TvgShape,
 } from '@thorvg/webcanvas';
 import wasmUrl from '@thorvg/webcanvas/dist/thorvg.wasm?url';
 import splashLottie from '../logo/powred.by.thorvg.1.json?raw';
@@ -54,6 +55,53 @@ const CREW_HEIGHT_RATIO = 2.6;
  * over all 27 frames, measured by rendering each frame with ThorVG SwCanvas.
  */
 const CREW_BOX: ContentBox = { x: 181, y: 169, width: 145, height: 192 };
+
+/**
+ * Appends a razor-sharp 3rd-order Bezier tapered vector blade (zero thickness at both tips
+ * `P0` and `P1`, arched mid-body along `curveBend`) with consistent NonZero winding so
+ * intersecting `'cross'` / `'slam'` arcs never XOR-cancel at their centers.
+ */
+function appendTaperedBlade(
+  shape: TvgShape,
+  cx: number,
+  cy: number,
+  angle: number,
+  halfLen: number,
+  halfThick: number,
+  curveBend: number
+): void {
+  if (halfLen < 0.5 || halfThick < 0.2) return;
+
+  const ux = Math.cos(angle);
+  const uy = Math.sin(angle);
+  const nx = -uy;
+  const ny = ux;
+
+  const p0x = cx - ux * halfLen;
+  const p0y = cy - uy * halfLen;
+  const p1x = cx + ux * halfLen;
+  const p1y = cy + uy * halfLen;
+
+  const ctrlU = 0.36 * halfLen;
+  const upperN = halfThick * 1.18 + curveBend;
+  const lowerN = -halfThick * 1.05 + curveBend * 0.58;
+
+  const u1x = cx - ux * ctrlU + nx * upperN;
+  const u1y = cy - uy * ctrlU + ny * upperN;
+  const u2x = cx + ux * ctrlU + nx * upperN;
+  const u2y = cy + uy * ctrlU + ny * upperN;
+
+  const l1x = cx + ux * ctrlU + nx * lowerN;
+  const l1y = cy + uy * ctrlU + ny * lowerN;
+  const l2x = cx - ux * ctrlU + nx * lowerN;
+  const l2y = cy - uy * ctrlU + ny * lowerN;
+
+  shape
+    .moveTo(p0x, p0y)
+    .cubicTo(u1x, u1y, u2x, u2y, p1x, p1y)
+    .cubicTo(l1x, l1y, l2x, l2y, p0x, p0y)
+    .close();
+}
 
 /**
  * ThorVG WebAssembly Vector Graphics Lifecycle Facade:
@@ -146,6 +194,10 @@ export class ThorVGRenderer {
         vfxGold: new TVG.Shape(),
         vfxCyan: new TVG.Shape(),
         vfxCrimson: new TVG.Shape(),
+        vfxSlashGold: new TVG.Shape(),
+        vfxSlashCyan: new TVG.Shape(),
+        vfxSlashCrimson: new TVG.Shape(),
+        vfxSlashCore: new TVG.Shape(),
       };
       this.shapes = shapes;
 
@@ -158,6 +210,10 @@ export class ThorVGRenderer {
       shapes.vfxGold.blend(addBlend);
       shapes.vfxCyan.blend(addBlend);
       shapes.vfxCrimson.blend(addBlend);
+      shapes.vfxSlashGold.blend(addBlend);
+      shapes.vfxSlashCyan.blend(addBlend);
+      shapes.vfxSlashCrimson.blend(addBlend);
+      shapes.vfxSlashCore.blend(addBlend);
 
       this.ownedObjects.push(
         shapes.bg,
@@ -179,7 +235,11 @@ export class ThorVGRenderer {
         shapes.playerCore,
         shapes.vfxGold,
         shapes.vfxCyan,
-        shapes.vfxCrimson
+        shapes.vfxCrimson,
+        shapes.vfxSlashGold,
+        shapes.vfxSlashCyan,
+        shapes.vfxSlashCrimson,
+        shapes.vfxSlashCore
       );
 
       this.canvas
@@ -201,12 +261,16 @@ export class ThorVGRenderer {
         .add(shapes.playerGlow)
         .add(shapes.playerCore);
 
-      // Character draws above its aura and below multi-color additive VFX shards.
+      // Character draws above its aura and below multi-color additive VFX shards & NonZero blades.
       this.loadCrewmate(TVG);
       this.canvas
         .add(shapes.vfxGold)
         .add(shapes.vfxCyan)
-        .add(shapes.vfxCrimson);
+        .add(shapes.vfxCrimson)
+        .add(shapes.vfxSlashGold)
+        .add(shapes.vfxSlashCyan)
+        .add(shapes.vfxSlashCrimson)
+        .add(shapes.vfxSlashCore);
 
       // Added last so it draws above everything while active.
       this.loadSplash(TVG);
@@ -316,6 +380,10 @@ export class ThorVGRenderer {
     shapes.vfxGold.reset();
     shapes.vfxCyan.reset();
     shapes.vfxCrimson.reset();
+    shapes.vfxSlashGold.reset();
+    shapes.vfxSlashCyan.reset();
+    shapes.vfxSlashCrimson.reset();
+    shapes.vfxSlashCore.reset();
     this.hideCrewmate();
   }
 
@@ -336,6 +404,10 @@ export class ThorVGRenderer {
     shapes.vfxGold.reset();
     shapes.vfxCyan.reset();
     shapes.vfxCrimson.reset();
+    shapes.vfxSlashGold.reset();
+    shapes.vfxSlashCyan.reset();
+    shapes.vfxSlashCrimson.reset();
+    shapes.vfxSlashCore.reset();
     this.hideCrewmate();
     if (!this.splashActive && this.splashAnim?.picture) {
       this.splashAnim.picture.visible(false);
@@ -426,6 +498,11 @@ export class ThorVGRenderer {
   ): void {
     if (!this.canvas || !this.tvg || !this.shapes || this.disposed) return;
 
+    this.shapes.vfxSlashGold.reset();
+    this.shapes.vfxSlashCyan.reset();
+    this.shapes.vfxSlashCrimson.reset();
+    this.shapes.vfxSlashCore.reset();
+
     const { playerX, playerY, runCycle } = renderMenuPreviewPass(
       this.shapes,
       this.width,
@@ -484,8 +561,8 @@ export class ThorVGRenderer {
     const ty = (y: number) => fy + (y - panY - fy) * zoom + syOff;
     const invTx = (sx: number) => panX + fx + (sx - sxOff - fx) / zoom;
     const invTy = (sy: number) => panY + fy + (sy - syOff - fy) / zoom;
-    // Linear up to 24x so 0.20x..20.0x user zoom has 0.0px foot-to-floor error, while extreme zoom remains bounded on CPU SwCanvas
-    const ts = (s: number) => s * Math.min(zoom, 24);
+    // Linear up to 48x so calm close-up (1.42x) * 20.0x paused user zoom (28.4x) has 0.0px foot-to-floor error, while extreme zoom remains bounded on CPU SwCanvas
+    const ts = (s: number) => s * Math.min(zoom, 48);
 
     // 1. Background
     const pulseBoost = Math.floor((frequency.low * 0.6 + (state.beatPulse ?? 0) * 0.5) * 28);
@@ -532,6 +609,10 @@ export class ThorVGRenderer {
     shapes.vfxGold.reset();
     shapes.vfxCyan.reset();
     shapes.vfxCrimson.reset();
+    shapes.vfxSlashGold.reset();
+    shapes.vfxSlashCyan.reset();
+    shapes.vfxSlashCrimson.reset();
+    shapes.vfxSlashCore.reset();
 
     let hasEffects = false;
     let hasGold = false;
@@ -674,6 +755,177 @@ export class ThorVGRenderer {
         .fillRule(shapes.evenOddRule)
         .fill(255, 45, 108, 220)
         .stroke({ width: vfxStrokeW, color: [255, 200, 220, 235] });
+    }
+
+    // 6. Pure 3rd-Order Bezier Tapered Vector Blades (`vfxSlash*` — NonZero additive winding)
+    let hasSlashGold = false;
+    let hasSlashCyan = false;
+    let hasSlashCrimson = false;
+    let hasSlashCore = false;
+
+    const pickSlashBucket = (rgb: [number, number, number]) => {
+      if (rgb[0] >= 200 && rgb[1] >= 180) {
+        hasSlashGold = true;
+        return shapes.vfxSlashGold;
+      }
+      if (rgb[2] >= 180 && rgb[0] < 160) {
+        hasSlashCyan = true;
+        return shapes.vfxSlashCyan;
+      }
+      hasSlashCrimson = true;
+      return shapes.vfxSlashCrimson;
+    };
+
+    const appendCoreBlade = (
+      cx: number,
+      cy: number,
+      angle: number,
+      cHalfLen: number,
+      cHalfThick: number,
+      cBend: number
+    ) => {
+      if (cHalfLen < 0.5 || cHalfThick < 0.2) return;
+      hasSlashCore = true;
+      appendTaperedBlade(shapes.vfxSlashCore, cx, cy, angle, cHalfLen, cHalfThick, cBend);
+    };
+
+    for (let i = 0; i < state.slashes.length; i += 1) {
+      const slash = state.slashes[i]!;
+      const p = Math.min(1, Math.max(0, slash.life / Math.max(0.001, slash.maxLife)));
+      const easeOut = 1 - Math.pow(1 - p, 3);
+      const thin = Math.pow(1 - p, 1.55);
+      const sx = tx(slash.x);
+      const sy = ty(slash.y);
+      const halfLen = ts(slash.length * 0.5 * (0.42 + 0.68 * easeOut));
+      const halfThick = ts(slash.width * 0.5 * thin);
+      if (halfLen < 0.5 || halfThick < 0.2) continue;
+
+      const outerBucket = pickSlashBucket(slash.color);
+
+      if (slash.kind === 'cross') {
+        const mainBend = halfThick * 0.55;
+        appendTaperedBlade(outerBucket, sx, sy, slash.angle, halfLen, halfThick, mainBend);
+        appendCoreBlade(
+          sx,
+          sy,
+          slash.angle,
+          halfLen * 0.88,
+          halfThick * 0.48,
+          mainBend * 0.55
+        );
+
+        const subAngle = slash.angle + 0.92;
+        const subLen = halfLen * 0.82;
+        const subThick = halfThick * 0.82;
+        const subBend = -halfThick * 0.45;
+        appendTaperedBlade(outerBucket, sx, sy, subAngle, subLen, subThick, subBend);
+        appendCoreBlade(
+          sx,
+          sy,
+          subAngle,
+          subLen * 0.88,
+          subThick * 0.48,
+          subBend * 0.55
+        );
+      } else if (slash.kind === 'pierce') {
+        appendTaperedBlade(outerBucket, sx, sy, slash.angle, halfLen * 1.12, halfThick, 0);
+        appendCoreBlade(sx, sy, slash.angle, halfLen * 0.94, halfThick * 0.5, 0);
+
+        const wakeCx = sx - Math.cos(slash.angle) * halfLen * 0.18;
+        const wakeCy = sy - Math.sin(slash.angle) * halfLen * 0.18;
+        const wakeLen = halfLen * 0.62;
+        const wakeThick = halfThick * 0.48;
+        const wakeBend = halfThick * 0.3;
+
+        appendTaperedBlade(
+          outerBucket,
+          wakeCx,
+          wakeCy,
+          slash.angle + 0.22,
+          wakeLen,
+          wakeThick,
+          wakeBend
+        );
+        appendCoreBlade(
+          wakeCx,
+          wakeCy,
+          slash.angle + 0.22,
+          wakeLen * 0.86,
+          wakeThick * 0.5,
+          wakeBend * 0.55
+        );
+
+        appendTaperedBlade(
+          outerBucket,
+          wakeCx,
+          wakeCy,
+          slash.angle - 0.22,
+          wakeLen,
+          wakeThick,
+          -wakeBend
+        );
+        appendCoreBlade(
+          wakeCx,
+          wakeCy,
+          slash.angle - 0.22,
+          wakeLen * 0.86,
+          wakeThick * 0.5,
+          -wakeBend * 0.55
+        );
+      } else {
+        const slamBend = -halfThick * 1.35;
+        appendTaperedBlade(
+          outerBucket,
+          sx,
+          sy,
+          slash.angle,
+          halfLen * 1.05,
+          halfThick * 1.15,
+          slamBend
+        );
+        appendCoreBlade(
+          sx,
+          sy,
+          slash.angle,
+          halfLen * 0.9,
+          halfThick * 0.52,
+          -halfThick * 0.72
+        );
+
+        const spikeAngle = -Math.PI * 0.5;
+        const spikeLen = halfLen * 0.68;
+        const spikeThick = halfThick * 0.78;
+        appendTaperedBlade(outerBucket, sx, sy, spikeAngle, spikeLen, spikeThick, 0);
+        appendCoreBlade(
+          sx,
+          sy,
+          spikeAngle,
+          spikeLen * 0.88,
+          spikeThick * 0.48,
+          0
+        );
+      }
+    }
+
+    if (hasSlashGold) {
+      shapes.vfxSlashGold
+        .fill(255, 230, 0, 225)
+        .stroke({ width: Math.max(1, ts(1.4)), color: [255, 245, 150, 210] });
+    }
+    if (hasSlashCyan) {
+      shapes.vfxSlashCyan
+        .fill(5, 213, 255, 225)
+        .stroke({ width: Math.max(1, ts(1.4)), color: [190, 248, 255, 210] });
+    }
+    if (hasSlashCrimson) {
+      shapes.vfxSlashCrimson
+        .fill(255, 42, 109, 225)
+        .stroke({ width: Math.max(1, ts(1.4)), color: [255, 165, 198, 210] });
+    }
+    if (hasSlashCore) {
+      shapes.vfxSlashCore
+        .fill(255, 255, 255, 248)
+        .stroke({ width: Math.max(0.8, ts(1.1)), color: [255, 255, 255, 225] });
     }
 
     this.canvas.update().render();

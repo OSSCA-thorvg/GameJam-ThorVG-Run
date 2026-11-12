@@ -1407,7 +1407,7 @@ body,
 .hud-zoom-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   background: rgba(5, 8, 18, 0.72);
   border: 1px solid rgba(5, 213, 255, 0.28);
   border-radius: 8px;
@@ -1434,6 +1434,7 @@ body,
 
 .hud-zoom-reset-btn {
   flex: 0 0 auto;
+  white-space: nowrap;
   padding: 4px 8px;
   font-size: 11px;
   color: #ffe600;
@@ -1446,6 +1447,44 @@ body,
   color: #9cb3d9;
   border-color: rgba(255, 255, 255, 0.16);
   background: rgba(255, 255, 255, 0.05);
+}
+
+.hud-cinematic-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: #b4c7e8;
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.07);
+  transition: color 0.14s ease, border-color 0.14s ease, background 0.14s ease;
+}
+
+.hud-cinematic-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+}
+
+.hud-cinematic-btn.active {
+  color: #05d5ff;
+  border-color: rgba(5, 213, 255, 0.52);
+  background: rgba(5, 213, 255, 0.16);
+}
+
+.hud-cinematic-btn.active:hover {
+  color: #05d5ff;
+  border-color: #05d5ff;
+  background: rgba(5, 213, 255, 0.25);
+}
+
+.cine-zoom-readout,
+.cine-zoom-readout strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.cine-zoom-readout.active strong {
+  color: #05d5ff;
+  font-variant-numeric: tabular-nums;
 }
 
 .pause-trigger-btn {

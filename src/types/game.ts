@@ -276,6 +276,20 @@ export interface AfterimageTrail {
   alpha: number;
 }
 
+export type SlashEffectKind = 'cross' | 'pierce' | 'slam';
+
+export interface SlashEffect {
+  x: number;
+  y: number;
+  angle: number;
+  length: number;
+  width: number;
+  color: [number, number, number];
+  life: number;
+  maxLife: number;
+  kind: SlashEffectKind;
+}
+
 export interface RenderFrameState {
   width: number;
   height: number;
@@ -319,6 +333,7 @@ export interface RenderFrameState {
   shockwaves: ShockwaveEffect[];
   afterimages: AfterimageTrail[];
   particles: VectorParticle[];
+  slashes: SlashEffect[];
 }
 
 export interface HUDTelemetry {
@@ -327,6 +342,7 @@ export interface HUDTelemetry {
   sfxMode?: SfxMode;
   fps: number;
   zoomDisplay: number;
+  cinematicCamera: boolean;
   score: number;
   combo: number;
   maxCombo: number;

@@ -175,6 +175,13 @@ export class SfxSynth {
     this.scheduleTone(740, 1180, 0.09, 0.09, 'sine', 0.012);
   }
 
+  public playBladeSlash(): void {
+    if (this.mode === 'off') return;
+    this.scheduleNoiseSnap(4600, 'highpass', 0.055, 0.14);
+    this.scheduleTone(1480, 320, 0.075, 0.13, 'triangle');
+    this.scheduleTone(2200, 680, 0.05, 0.07, 'sine', 0.008);
+  }
+
   public playPrismStar(): void {
     if (this.mode === 'off') return;
     const notes = [587.33, 783.99, 1174.66, 1567.98];

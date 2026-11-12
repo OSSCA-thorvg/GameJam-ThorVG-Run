@@ -27,6 +27,10 @@ export interface TvgShapePool {
   vfxGold: TvgShape;
   vfxCyan: TvgShape;
   vfxCrimson: TvgShape;
+  vfxSlashGold: TvgShape;
+  vfxSlashCyan: TvgShape;
+  vfxSlashCrimson: TvgShape;
+  vfxSlashCore: TvgShape;
 }
 
 /**

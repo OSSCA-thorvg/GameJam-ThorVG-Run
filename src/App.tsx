@@ -23,6 +23,7 @@ import {
 } from './types/game';
 
 const PLAYSTYLE_STORAGE_KEY = 'thorvg-run:playstyle:v1';
+const CINEMATIC_STORAGE_KEY = 'thorvg-run:cinematic:v1';
 
 function loadInitialPlaystyle(): ResonanceFormType {
   try {
@@ -36,12 +37,25 @@ function loadInitialPlaystyle(): ResonanceFormType {
   return 'synth';
 }
 
+function loadInitialCinematic(): boolean {
+  try {
+    const raw = window.localStorage.getItem(CINEMATIC_STORAGE_KEY);
+    if (raw === '0' || raw === 'false') {
+      return false;
+    }
+  } catch {
+    // Ignore storage access errors (e.g. private browsing / restricted context).
+  }
+  return true;
+}
+
 const INITIAL_HUD: HUDTelemetry = {
   rendererMode: 'sw',
   difficulty: 'normal',
   sfxMode: 'full',
   fps: 60,
   zoomDisplay: 1.0,
+  cinematicCamera: true,
   score: 0,
   combo: 1,
   maxCombo: 1,
@@ -79,6 +93,7 @@ export const App: React.FC = () => {
   const [selectedTrack, setSelectedTrack] = useState<TrackMetadata>(BUILT_IN_TRACKS[0]!);
   const [customTracks, setCustomTracks] = useState<TrackMetadata[]>([]);
   const [playstyle, setPlaystyle] = useState<ResonanceFormType>(() => loadInitialPlaystyle());
+  const [cinematicCamera, setCinematicCamera] = useState<boolean>(() => loadInitialCinematic());
   const [difficulty, setDifficulty] = useState<DifficultyMode>('normal');
   const [engineReady, setEngineReady] = useState<boolean>(false);
   /** Increments each time a renderer finishes init, so loops can restart on the new instance. */
@@ -89,6 +104,7 @@ export const App: React.FC = () => {
   const [hud, setHud] = useState<HUDTelemetry>(() => ({
     ...INITIAL_HUD,
     activeForm: playstyle,
+    cinematicCamera,
   }));
   const [loadingState, setLoadingState] = useState<LoadingProgress>({
     progress: 0,
@@ -104,6 +120,8 @@ export const App: React.FC = () => {
   // Refs read by RAF preview and InputController without re-subscribing listeners.
   const playstyleRef = useRef<ResonanceFormType>(playstyle);
   playstyleRef.current = playstyle;
+  const cinematicCameraRef = useRef<boolean>(cinematicCamera);
+  cinematicCameraRef.current = cinematicCamera;
   const difficultyRef = useRef<DifficultyMode>(difficulty);
   difficultyRef.current = difficulty;
   const inGameRef = useRef<boolean>(inGame);
@@ -123,12 +141,18 @@ export const App: React.FC = () => {
       setHud(nextHud);
     });
     engine.setPlaystyle(playstyle);
+    engine.setCinematicCamera(cinematicCameraRef.current);
     gameEngineRef.current = engine;
   }
 
   useEffect(() => {
     gameEngineRef.current?.setPlaystyle(playstyle);
   }, [playstyle]);
+
+  useEffect(() => {
+    cinematicCameraRef.current = cinematicCamera;
+    gameEngineRef.current?.setCinematicCamera(cinematicCamera);
+  }, [cinematicCamera]);
 
   // Create the ThorVG renderer ('sw' SwCanvas or 'gl' GlCanvas) on a fresh
   // <canvas key={rendererMode} />. Re-created ONLY when the renderer backend changes.
@@ -148,6 +172,7 @@ export const App: React.FC = () => {
         const w = window.innerWidth;
         const h = window.innerHeight;
         renderer.resize(w, h);
+        gameEngineRef.current?.setCinematicCamera(cinematicCameraRef.current);
         gameEngineRef.current?.attachRenderer(renderer, rendererMode, w, h);
         setEngineReady(true);
         setRendererEpoch((n) => n + 1);
@@ -242,6 +267,20 @@ export const App: React.FC = () => {
     gameEngineRef.current?.resetCameraView();
   }, []);
 
+  const handleToggleCinematicCamera = useCallback(() => {
+    const next = gameEngineRef.current
+      ? gameEngineRef.current.toggleCinematicCamera()
+      : !cinematicCameraRef.current;
+    cinematicCameraRef.current = next;
+    setCinematicCamera(next);
+    try {
+      window.localStorage.setItem(CINEMATIC_STORAGE_KEY, next ? '1' : '0');
+    } catch {
+      // Ignore storage access errors.
+    }
+    setHud((prev) => ({ ...prev, cinematicCamera: next }));
+  }, []);
+
   // Command-Pattern InputController binding keyboard & pointer controls once
   useEffect(() => {
     const controller = new InputController({
@@ -261,6 +300,7 @@ export const App: React.FC = () => {
           setHud((prev) => ({ ...prev, sfxMode: next }));
         }
       },
+      onToggleCinematicCamera: handleToggleCinematicCamera,
       onTogglePause: handleTogglePause,
       onExitToMenu: handleReturnToMenu,
       onWheelZoom: (factor, canvasX, canvasY) => {
@@ -277,7 +317,7 @@ export const App: React.FC = () => {
       },
     });
     return controller.attach(shellRef.current);
-  }, [handleReturnToMenu, handleTogglePause]);
+  }, [handleReturnToMenu, handleToggleCinematicCamera, handleTogglePause]);
 
   const handleUploadFile = useCallback(
     async (file: File, supportedFormats: readonly AudioFormat[]) => {
@@ -314,12 +354,14 @@ export const App: React.FC = () => {
     const seq = ++launchSeqRef.current;
     rendererRef.current?.clearForTransition();
     engine.setPlaystyle(playstyle);
+    engine.setCinematicCamera(cinematicCamera);
     setHud((prev) => ({
       ...INITIAL_HUD,
       rendererMode,
       difficulty,
       sfxMode: gameEngineRef.current?.getSfxMode() ?? prev.sfxMode ?? 'full',
       activeForm: playstyle,
+      cinematicCamera,
     }));
     setLoadingState({ progress: 0.06, stage: 'decoding' });
     setScreen('loading');
@@ -353,7 +395,7 @@ export const App: React.FC = () => {
         }
       }
     })();
-  }, [difficulty, playstyle, rendererMode, selectedTrack]);
+  }, [cinematicCamera, difficulty, playstyle, rendererMode, selectedTrack]);
 
   const handleSwitchRendererAndReplay = useCallback(
     (nextMode: RendererMode) => {
@@ -409,6 +451,7 @@ export const App: React.FC = () => {
           onPause={handlePauseRun}
           onStepZoom={handleStepZoom}
           onResetZoom={handleResetView}
+          onToggleCinematicCamera={handleToggleCinematicCamera}
           onToggleRendererInGame={(nextMode) => setRendererMode(nextMode)}
           onCycleSfxMode={() => {
             const next = gameEngineRef.current?.cycleSfxMode();

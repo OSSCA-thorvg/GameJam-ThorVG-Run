@@ -174,6 +174,9 @@ export const en = {
     zoomReset: '1x',
     zoomInTitle: 'Zoom In (+ / Wheel)',
     zoomOutTitle: 'Zoom Out (- / Wheel)',
+    cinematicAuto: '🎬 AUTO [C]',
+    cinematicFixed: '🎬 1x [C]',
+    cinematicTitle: 'Toggle Dynamic Vector Cinematic Camera [C]',
   },
   pause: {
     badge: '⏸ PAUSED · THORVG VECTOR INSPECTOR',
@@ -397,6 +400,9 @@ export const ko: Messages = {
     zoomReset: '1x',
     zoomInTitle: '확대 (+ / 마우스 휠)',
     zoomOutTitle: '축소 (- / 마우스 휠)',
+    cinematicAuto: '🎬 자동 [C]',
+    cinematicFixed: '🎬 고정 [C]',
+    cinematicTitle: '구간 연동 다이나믹 벡터 시네마틱 카메라 전환 [C]',
   },
   pause: {
     badge: '⏸ 일시정지 · THORVG 벡터 맵 뷰어',
