@@ -1,32 +1,27 @@
-import { LEAD_IN_SEGMENTS, REFERENCE_HEIGHT, SEGMENT_WIDTH } from '../audio/TrackAnalyzer';
+import {
+  FLOOR_Y,
+  LANE_HIGH_Y,
+  LANE_LOW_Y,
+  LEAD_IN_SEGMENTS,
+  REFERENCE_HEIGHT,
+  SEGMENT_WIDTH,
+} from '../audio/TrackAnalyzer';
 import type {
-  BeatTrap,
+  BeatTarget,
   BezierSegment,
-  DashRing,
   FrequencyBands,
-  HoldRail,
-  JumpPad,
   ResonanceFormType,
-  ResonanceOrb,
   SectionIntensity,
-  SkyPlatform,
   TrackBlueprint,
 } from '../types/game';
 import { evaluateBezierFloor } from './bezierMath';
 
-const FORMS_ORDER: ResonanceFormType[] = ['bass', 'synth', 'treble'];
+const FORMS_ORDER: readonly ResonanceFormType[] = ['bass', 'synth', 'treble'];
 
-export type RuntimeTrap = BeatTrap & { screenFloorY?: number; baseDroneY?: number };
-
-type RuntimeOrb = ResonanceOrb & { baseY: number; baseX: number };
-type RuntimeSkyPlatform = SkyPlatform & { baseY: number };
-type RuntimeJumpPad = JumpPad & { baseY: number };
-type RuntimeDashRing = DashRing & { baseY: number };
-type RuntimeHoldRail = HoldRail & { baseY: number };
+type RuntimeTarget = BeatTarget & { baseY: number };
 
 /**
- * Binary search lower-bound on sorted point entities (`item.worldX >= minX`).
- * Achieves O(log N) lookup before O(K) visible range scan.
+ * Binary search lower-bound on sorted `BeatTarget`s (`item.worldX >= minX`).
  */
 function lowerBoundWorldX<T extends { worldX: number }>(
   items: readonly T[],
@@ -45,31 +40,20 @@ function lowerBoundWorldX<T extends { worldX: number }>(
   return lo;
 }
 
-/**
- * Binary search lower-bound on sorted span entities (`item.x0 >= minStartX`).
- * Passing `minStartX = minX - maxSpan` guarantees every overlapping span (`x1 >= minX`) is visited in O(log N + K).
- */
-function lowerBoundSpanX0<T extends { x0: number }>(
-  items: readonly T[],
-  minStartX: number
-): number {
-  let lo = 0;
-  let hi = items.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >>> 1;
-    if (items[mid]!.x0 < minStartX) {
-      lo = mid + 1;
-    } else {
-      hi = mid;
-    }
-  }
-  return lo;
+function isSlashKind(kind: BeatTarget['kind']): boolean {
+  return (
+    kind === 'high' ||
+    kind === 'low' ||
+    kind === 'chord' ||
+    kind === 'hold' ||
+    kind === 'rush'
+  );
 }
 
 /**
- * Spatial Sliding-Window Streamer for Hybrid Rhythm-Runner terrain:
- * - Pre-sorts all course entities by X coordinate once on `loadBlueprint`
- * - Inline-caches reference `baseY` on runtime entities (eliminating per-frame Map lookups)
+ * Spatial Sliding-Window Streamer for the 2-Lane Rhythm Slasher Stage (`rhythm-slasher-v6`):
+ * - Pre-sorts all `BeatTarget`s by `worldX` once on `loadBlueprint`
+ * - Tracks `maxTargetSpan` so long `'hold'` ribbons & `'rush'` boss cores are never culled early
  * - Uses O(log N + K) binary-search range culling + zero-allocation reusable view buffers
  */
 export class BezierTerrain {
@@ -77,30 +61,19 @@ export class BezierTerrain {
   private baseSegments: BezierSegment[] = [];
   private readonly visibleSegments: BezierSegment[] = [];
 
-  private allOrbs: RuntimeOrb[] = [];
-  private readonly visibleOrbs: ResonanceOrb[] = [];
-
-  private allTraps: RuntimeTrap[] = [];
-  private readonly visibleTraps: RuntimeTrap[] = [];
-
-  private allSkyPlatforms: RuntimeSkyPlatform[] = [];
-  private maxSkySpan: number = 0;
-  private readonly visibleSkyPlatforms: SkyPlatform[] = [];
-
-  private allJumpPads: RuntimeJumpPad[] = [];
-  private readonly visibleJumpPads: JumpPad[] = [];
-
-  private allDashRings: RuntimeDashRing[] = [];
-  private readonly visibleDashRings: DashRing[] = [];
-
-  private allHoldRails: RuntimeHoldRail[] = [];
-  private maxRailSpan: number = 0;
-  private readonly visibleHoldRails: HoldRail[] = [];
+  private allTargets: RuntimeTarget[] = [];
+  private maxTargetSpan: number = 0;
+  private readonly visibleTargets: BeatTarget[] = [];
 
   private viewportHeight: number = REFERENCE_HEIGHT;
   private refHeight: number = REFERENCE_HEIGHT;
+  private refLaneHighY: number = LANE_HIGH_Y;
+  private refLaneLowY: number = LANE_LOW_Y;
+  private refFloorY: number = FLOOR_Y;
   private segWidth: number = SEGMENT_WIDTH;
   private leadInSegments: number = LEAD_IN_SEGMENTS;
+  private totalSlashTargets: number = 0;
+  private totalStars: number = 0;
   private hasBlueprint: boolean = false;
 
   public loadBlueprint(
@@ -110,6 +83,9 @@ export class BezierTerrain {
   ): void {
     this.viewportHeight = viewportHeight;
     this.refHeight = blueprint.referenceHeight || REFERENCE_HEIGHT;
+    this.refLaneHighY = blueprint.laneHighY || LANE_HIGH_Y;
+    this.refLaneLowY = blueprint.laneLowY || LANE_LOW_Y;
+    this.refFloorY = blueprint.floorY || FLOOR_Y;
     this.segWidth = blueprint.segmentWidth || SEGMENT_WIDTH;
     this.leadInSegments = blueprint.leadInSegments ?? LEAD_IN_SEGMENTS;
     this.hasBlueprint = true;
@@ -120,81 +96,44 @@ export class BezierTerrain {
     this.allSegments = blueprint.segments.map((s) => ({
       ...s,
       y0: s.y0 * scaleY,
+      cx1: s.cx1 * scaleY,
       cy1: s.cy1 * scaleY,
+      cx2: s.cx2 * scaleY,
       cy2: s.cy2 * scaleY,
       y1: s.y1 * scaleY,
     }));
 
-    this.allOrbs = blueprint.orbs
-      .map((o) => ({
-        ...o,
-        baseX: o.worldX,
-        baseY: o.worldY,
-        collected: false,
-        screenY: o.worldY * scaleY,
-      }))
-      .sort((a, b) => a.worldX - b.worldX);
+    this.maxTargetSpan = 0;
+    let slashCount = 0;
+    let starCount = 0;
 
-    this.allTraps = blueprint.traps
-      .map((t) => ({
-        ...t,
-        baseDroneY: t.droneWorldY,
-        destroyed: false,
-        passed: false,
-        screenFloorY:
-          t.isAerialDrone && t.droneWorldY !== undefined
-            ? t.droneWorldY * scaleY
-            : ((t as RuntimeTrap).screenFloorY ?? this.refHeight * 0.7) * scaleY,
-      }))
-      .sort((a, b) => a.worldX - b.worldX);
-
-    this.maxSkySpan = 0;
-    this.allSkyPlatforms = (blueprint.skyPlatforms ?? [])
-      .map((p) => {
-        const span = Math.max(0, p.x1 - p.x0);
-        if (span > this.maxSkySpan) this.maxSkySpan = span;
+    this.allTargets = blueprint.targets
+      .map((t) => {
+        const span = Math.max(0, (t.endWorldX ?? t.worldX) - t.worldX);
+        if (span > this.maxTargetSpan) this.maxTargetSpan = span;
+        if (isSlashKind(t.kind)) slashCount++;
+        if (t.isPrismStar) starCount++;
         return {
-          ...p,
-          baseY: p.worldY,
-          screenY: p.worldY * scaleY,
+          ...t,
+          baseY: t.worldY,
+          screenY: t.worldY * scaleY,
+          resolved: false,
+          hitGrade: undefined,
+          holdActive: false,
+          holdNextTickSec: undefined,
+          holdReleaseGraceSec: undefined,
+          chordPartialLane: undefined,
+          chordPartialSec: undefined,
+          chordPartialSignedMs: undefined,
+          rushHits: t.kind === 'rush' ? 0 : undefined,
         };
       })
-      .sort((a, b) => a.x0 - b.x0);
-
-    this.allJumpPads = (blueprint.jumpPads ?? [])
-      .map((jp) => ({
-        ...jp,
-        baseY: jp.worldY,
-        triggered: false,
-        screenY: jp.worldY * scaleY,
-      }))
       .sort((a, b) => a.worldX - b.worldX);
 
-    this.allDashRings = (blueprint.dashRings ?? [])
-      .map((dr) => ({
-        ...dr,
-        baseY: dr.worldY,
-        triggered: false,
-        screenY: dr.worldY * scaleY,
-      }))
-      .sort((a, b) => a.worldX - b.worldX);
+    this.totalSlashTargets = blueprint.totalSlashTargets || slashCount;
+    this.totalStars = blueprint.totalStars || starCount;
 
-    this.maxRailSpan = 0;
-    this.allHoldRails = (blueprint.holdRails ?? [])
-      .map((hr) => {
-        const span = Math.max(0, hr.x1 - hr.x0);
-        if (span > this.maxRailSpan) this.maxRailSpan = span;
-        return {
-          ...hr,
-          baseY: hr.worldY,
-          active: false,
-          completed: false,
-          screenY: hr.worldY * scaleY,
-        };
-      })
-      .sort((a, b) => a.x0 - b.x0);
-
-    this.update(-viewportWidth * 0.24, viewportWidth, viewportHeight, 0, {
+    this.update(-viewportWidth * 0.25, viewportWidth, viewportHeight, 0, {
       low: 0.2,
       mid: 0.2,
       high: 0.2,
@@ -205,8 +144,9 @@ export class BezierTerrain {
 
   public reset(viewportWidth: number, viewportHeight: number): void {
     this.viewportHeight = viewportHeight;
+    const scaleY = viewportHeight / this.refHeight;
+
     if (this.hasBlueprint && this.baseSegments.length > 0) {
-      const scaleY = viewportHeight / this.refHeight;
       for (let i = 0; i < this.allSegments.length; i++) {
         const base = this.baseSegments[i]!;
         const seg = this.allSegments[i]!;
@@ -215,41 +155,22 @@ export class BezierTerrain {
         seg.cy2 = base.cy2 * scaleY;
         seg.y1 = base.y1 * scaleY;
       }
-      for (let i = 0; i < this.allOrbs.length; i++) {
-        const orb = this.allOrbs[i]!;
-        orb.collected = false;
-        orb.worldX = orb.baseX;
-        orb.screenY = orb.baseY * scaleY;
+
+      for (let i = 0; i < this.allTargets.length; i++) {
+        const t = this.allTargets[i]!;
+        t.screenY = t.baseY * scaleY;
+        t.resolved = false;
+        t.hitGrade = undefined;
+        t.holdActive = false;
+        t.holdNextTickSec = undefined;
+        t.holdReleaseGraceSec = undefined;
+        t.chordPartialLane = undefined;
+        t.chordPartialSec = undefined;
+        t.chordPartialSignedMs = undefined;
+        t.rushHits = t.kind === 'rush' ? 0 : undefined;
       }
-      for (let i = 0; i < this.allTraps.length; i++) {
-        const trap = this.allTraps[i]!;
-        trap.destroyed = false;
-        trap.passed = false;
-        if (trap.isAerialDrone && trap.baseDroneY !== undefined) {
-          trap.screenFloorY = trap.baseDroneY * scaleY;
-        }
-      }
-      for (let i = 0; i < this.allSkyPlatforms.length; i++) {
-        const plat = this.allSkyPlatforms[i]!;
-        plat.screenY = plat.baseY * scaleY;
-      }
-      for (let i = 0; i < this.allJumpPads.length; i++) {
-        const pad = this.allJumpPads[i]!;
-        pad.triggered = false;
-        pad.screenY = pad.baseY * scaleY;
-      }
-      for (let i = 0; i < this.allDashRings.length; i++) {
-        const ring = this.allDashRings[i]!;
-        ring.triggered = false;
-        ring.screenY = ring.baseY * scaleY;
-      }
-      for (let i = 0; i < this.allHoldRails.length; i++) {
-        const rail = this.allHoldRails[i]!;
-        rail.active = false;
-        rail.completed = false;
-        rail.screenY = rail.baseY * scaleY;
-      }
-      this.update(-viewportWidth * 0.24, viewportWidth, viewportHeight, 0, {
+
+      this.update(-viewportWidth * 0.25, viewportWidth, viewportHeight, 0, {
         low: 0.2,
         mid: 0.2,
         high: 0.2,
@@ -259,31 +180,41 @@ export class BezierTerrain {
       return;
     }
 
-    // Minimal flat sprint fallback
+    // Minimal fallback stage if `reset()` is invoked before any blueprint is loaded
     this.baseSegments = [];
     this.allSegments = [];
+    this.allTargets = [];
     this.leadInSegments = 4;
-    const baseFloor = viewportHeight * 0.7;
+    const baseFloor = this.refFloorY * scaleY;
+
     for (let i = -this.leadInSegments; i < 40; i++) {
       const x0 = i * this.segWidth;
       const x1 = (i + 1) * this.segWidth;
-      const seg: BezierSegment = {
+      const baseSeg: BezierSegment = {
         x0,
-        y0: baseFloor,
+        y0: this.refFloorY,
         cx1: x0 + this.segWidth * 0.35,
-        cy1: baseFloor,
+        cy1: this.refFloorY,
         cx2: x0 + this.segWidth * 0.65,
-        cy2: baseFloor,
+        cy2: this.refFloorY,
         x1,
-        y1: baseFloor,
+        y1: this.refFloorY,
         energyBand: FORMS_ORDER[Math.abs(i) % FORMS_ORDER.length]!,
-        isGap: false,
       };
-      this.baseSegments.push({ ...seg });
-      this.allSegments.push(seg);
+      this.baseSegments.push(baseSeg);
+      this.allSegments.push({
+        ...baseSeg,
+        y0: baseFloor,
+        cy1: baseFloor,
+        cy2: baseFloor,
+        y1: baseFloor,
+      });
     }
 
+    this.totalSlashTargets = 0;
+    this.totalStars = 0;
     this.visibleSegments.length = 0;
+    this.visibleTargets.length = 0;
     const initialCount = Math.min(18, this.allSegments.length);
     for (let i = 0; i < initialCount; i++) {
       this.visibleSegments.push(this.allSegments[i]!);
@@ -294,7 +225,7 @@ export class BezierTerrain {
     cameraX: number,
     viewportWidth: number,
     viewportHeight: number,
-    timeSec: number,
+    _timeSec: number,
     freq: FrequencyBands,
     viewWorldBounds?: { minX: number; maxX: number }
   ): void {
@@ -305,7 +236,7 @@ export class BezierTerrain {
     const minX = viewWorldBounds ? viewWorldBounds.minX : physMinX;
     const maxX = viewWorldBounds ? viewWorldBounds.maxX : physMaxX;
 
-    // 1. Direct index-calculated visible segments (O(K), zero array allocation)
+    // 1. Direct index-calculated visible 1F neon deck segments (O(K), zero allocation)
     const startIdx = Math.max(0, Math.floor(minX / this.segWidth) + this.leadInSegments - 1);
     const endIdx = Math.min(
       this.allSegments.length - 1,
@@ -320,9 +251,9 @@ export class BezierTerrain {
 
       const isDrop = base.intensity === 'drop';
       const segPulse = freq.isBeat
-        ? (isDrop ? 9.5 : 3.0) * scaleY
+        ? (isDrop ? 7.5 : 2.8) * scaleY
         : isDrop
-          ? freq.low * 5.0 * scaleY
+          ? freq.low * 4.2 * scaleY
           : 0;
 
       seg.y0 = base.y0 * scaleY;
@@ -332,105 +263,43 @@ export class BezierTerrain {
       this.visibleSegments.push(seg);
     }
 
-    const fallbackY = viewportHeight * 0.7;
+    // 2. Visible unresolved BeatTargets — O(log N + K) accounting for `maxTargetSpan`
+    this.visibleTargets.length = 0;
+    const searchMinX = minX - this.maxTargetSpan - 180;
+    const searchMaxX = maxX + 180;
+    const firstIdx = lowerBoundWorldX(this.allTargets, searchMinX);
 
-    // 2. Visible Rhythm Beat Notes — O(log N + K) on immutable sorted `baseX` (safe under magnetic `worldX` pull!)
-    this.visibleOrbs.length = 0;
-    let loOrb = 0;
-    let hiOrb = this.allOrbs.length;
-    const orbMinBaseX = minX - 220;
-    const orbMaxBaseX = maxX + 220;
-    while (loOrb < hiOrb) {
-      const mid = (loOrb + hiOrb) >>> 1;
-      if (this.allOrbs[mid]!.baseX < orbMinBaseX) {
-        loOrb = mid + 1;
-      } else {
-        hiOrb = mid;
-      }
-    }
-    for (let i = loOrb; i < this.allOrbs.length; i++) {
-      const orb = this.allOrbs[i]!;
-      if (orb.baseX > orbMaxBaseX) break;
-      if (orb.collected) continue;
-      // Preserve magnetic vertical pull if already pulled away from default bobbing lane
-      const naturalY = orb.baseY * scaleY + Math.sin(timeSec * 6 + orb.id * 0.5) * 2.5;
-      if (orb.worldX === orb.baseX) {
-        orb.screenY = naturalY;
-      }
-      this.visibleOrbs.push(orb);
-    }
+    for (let i = firstIdx; i < this.allTargets.length; i++) {
+      const target = this.allTargets[i]!;
+      if (target.worldX > searchMaxX) break;
+      if (target.resolved) continue;
+      const targetEndX = target.endWorldX ?? target.worldX;
+      if (targetEndX < minX - 180) continue;
 
-    // 3. Visible Beat Traps (Ground Spikes) & Aerial BeatDrones — O(log N + K)
-    this.visibleTraps.length = 0;
-    for (let i = lowerBoundWorldX(this.allTraps, minX); i < this.allTraps.length; i++) {
-      const trap = this.allTraps[i]!;
-      if (trap.worldX > maxX) break;
-      if (trap.destroyed) continue;
-      if (trap.isAerialDrone && trap.baseDroneY !== undefined) {
-        trap.screenFloorY = trap.baseDroneY * scaleY + Math.sin(timeSec * 5.2 + trap.id) * 5.5;
-      } else {
-        const { floorY } = evaluateBezierFloor(this.visibleSegments, trap.worldX, fallbackY);
-        trap.screenFloorY = floorY;
-      }
-      this.visibleTraps.push(trap);
+      target.screenY = target.baseY * scaleY;
+      this.visibleTargets.push(target);
     }
+  }
 
-    // 4. Visible 2F Sky Platforms — O(log N + K)
-    this.visibleSkyPlatforms.length = 0;
-    for (
-      let i = lowerBoundSpanX0(this.allSkyPlatforms, minX - this.maxSkySpan);
-      i < this.allSkyPlatforms.length;
-      i++
-    ) {
-      const plat = this.allSkyPlatforms[i]!;
-      if (plat.x0 > maxX) break;
-      if (plat.x1 < minX) continue;
-      plat.screenY = plat.baseY * scaleY;
-      this.visibleSkyPlatforms.push(plat);
-    }
+  public getLaneHighScreenY(): number {
+    return this.refLaneHighY * (this.viewportHeight / this.refHeight);
+  }
 
-    // 6. Visible Beat Jump Pads — O(log N + K)
-    this.visibleJumpPads.length = 0;
-    for (let i = lowerBoundWorldX(this.allJumpPads, minX); i < this.allJumpPads.length; i++) {
-      const pad = this.allJumpPads[i]!;
-      if (pad.worldX > maxX) break;
-      pad.screenY = pad.baseY * scaleY;
-      this.visibleJumpPads.push(pad);
-    }
+  public getLaneLowScreenY(): number {
+    return this.refLaneLowY * (this.viewportHeight / this.refHeight);
+  }
 
-    // 7. Visible Airborne Dash Rings — O(log N + K)
-    this.visibleDashRings.length = 0;
-    for (let i = lowerBoundWorldX(this.allDashRings, minX); i < this.allDashRings.length; i++) {
-      const ring = this.allDashRings[i]!;
-      if (ring.worldX > maxX) break;
-      if (ring.triggered) continue;
-      ring.screenY = ring.baseY * scaleY;
-      this.visibleDashRings.push(ring);
-    }
-
-    // 8. Visible Hold Note Rails — O(log N + K)
-    this.visibleHoldRails.length = 0;
-    for (
-      let i = lowerBoundSpanX0(this.allHoldRails, minX - this.maxRailSpan);
-      i < this.allHoldRails.length;
-      i++
-    ) {
-      const rail = this.allHoldRails[i]!;
-      if (rail.x0 > maxX) break;
-      if (rail.x1 < minX) continue;
-      rail.screenY = rail.baseY * scaleY;
-      this.visibleHoldRails.push(rail);
-    }
+  public getFloorScreenY(): number {
+    return this.refFloorY * (this.viewportHeight / this.refHeight);
   }
 
   public sampleFloor(worldX: number): {
     floorY: number;
     slope: number;
     angleRad: number;
-    isGap: boolean;
     segment?: BezierSegment;
   } {
-    const fallbackY = this.viewportHeight * 0.7;
+    const fallbackY = this.getFloorScreenY();
     const res = evaluateBezierFloor(this.visibleSegments, worldX, fallbackY);
     let matchedSeg: BezierSegment | undefined;
     for (let i = 0; i < this.visibleSegments.length; i++) {
@@ -442,76 +311,39 @@ export class BezierTerrain {
     }
     return {
       ...res,
-      isGap: Boolean(matchedSeg?.isGap),
       segment: matchedSeg,
     };
   }
 
-  /**
-   * One-way 2F Sky Platform collision: lands when crossing downward onto the platform surface
-   * unless holding Fast-Drop (`dropThrough`).
-   */
-  public sampleSkyPlatform(
-    worldX: number,
-    prevBottomY: number,
-    nextBottomY: number,
-    dropThrough: boolean
-  ): SkyPlatform | null {
-    if (dropThrough) return null;
-    for (let i = 0; i < this.visibleSkyPlatforms.length; i++) {
-      const plat = this.visibleSkyPlatforms[i]!;
-      if (worldX < plat.x0 - 10 || worldX > plat.x1 + 10) continue;
-      const py = plat.screenY ?? plat.worldY;
-      if (prevBottomY <= py + 16 && nextBottomY >= py - 2) {
-        return plat;
-      }
-    }
-    return null;
-  }
-
   public getSectionIntensityAt(worldX: number): SectionIntensity {
-    const { segment } = this.sampleFloor(worldX);
-    return segment?.intensity ?? 'groove';
+    const idx = Math.max(
+      0,
+      Math.min(
+        this.allSegments.length - 1,
+        Math.floor(worldX / this.segWidth) + this.leadInSegments
+      )
+    );
+    return this.allSegments[idx]?.intensity ?? 'groove';
   }
 
   public getSegments(): BezierSegment[] {
     return this.visibleSegments;
   }
 
-  public getOrbs(): ResonanceOrb[] {
-    return this.visibleOrbs;
+  public getTargets(): BeatTarget[] {
+    return this.visibleTargets;
   }
 
-  public getTotalOrbCount(): number {
-    return this.allOrbs.length;
+  public getAllTargets(): BeatTarget[] {
+    return this.allTargets;
+  }
+
+  public getTotalSlashTargetCount(): number {
+    return this.totalSlashTargets;
   }
 
   public getTotalStarCount(): number {
-    let count = 0;
-    for (let i = 0; i < this.allOrbs.length; i++) {
-      if (this.allOrbs[i]!.isPrismStar) count++;
-    }
-    return count;
-  }
-
-  public getTraps(): RuntimeTrap[] {
-    return this.visibleTraps;
-  }
-
-  public getSkyPlatforms(): SkyPlatform[] {
-    return this.visibleSkyPlatforms;
-  }
-
-  public getJumpPads(): JumpPad[] {
-    return this.visibleJumpPads;
-  }
-
-  public getDashRings(): DashRing[] {
-    return this.visibleDashRings;
-  }
-
-  public getHoldRails(): HoldRail[] {
-    return this.visibleHoldRails;
+    return this.totalStars;
   }
 
   public getMaxWorldX(): number {

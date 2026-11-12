@@ -1,36 +1,38 @@
-import type { JudgmentGrade, ResonanceFormType, SfxMode } from '../types/game';
+import type { JudgmentGrade, SfxMode, SlashLane } from '../types/game';
 
 /**
- * Zero-Asset Procedural Web Audio Synthesizer (`<2ms` latency, `0KB` bundle overhead).
- * Connects directly to `AudioContext.destination` through a dedicated bus so procedural
- * chimes/impacts NEVER pollute the song's `AnalyserNode` FFT spectrum!
+ * Zero-Asset `<0.5ms` Percussive Drum & Katana Web Audio Synthesizer (`0KB` bundle overhead).
+ * - Connects directly to `AudioContext.destination` via a dedicated SFX bus so procedural
+ *   impacts NEVER pollute the song's `AnalyserNode` FFT spectrum.
+ * - Replaces tonal C-major chimes & hard 35ms mutes with `<0.5ms` (`0.4ms`) percussive 3-layer
+ *   drum/katana transients + a `25ms` rolling polyphonic density scaler (`1 / sqrt(n)`).
  *
  * Modes:
- * - `'full'` (Option 1, Default): Subtle form-linked harmonic note chimes + all action/gimmick SFX
- * - `'impact'` (Option 2, Live-switchable): Skips ordinary note chimes for 100% pure song playback,
- *   keeping crisp action/gimmick SFX (JumpPad, SlamPad, DashRing, Drone/Trap shatter, Star, Overdrive, Miss)
- * - `'off'`: Silent
+ * - `'full'` (Default): 3-layer percussive kick/snare/katana hit SFX + air-swing + gimmick SFX
+ * - `'impact'`: Skips ordinary lane hits & air-swings for pure song playback; plays chord cross,
+ *   critical impacts, rush combo, shatter, overdrive, prism star, and miss SFX
+ * - `'off'`: Mutes all procedural SFX
  */
 export class SfxSynth {
   private ctx: AudioContext | null = null;
   private busGain: GainNode | null = null;
   private noiseBuffer: AudioBuffer | null = null;
   private mode: SfxMode = 'full';
-  private lastNoteTime: number = 0;
+  private readonly recentHitTimes: number[] = [];
 
   public attachContext(ctx: AudioContext): void {
     if (this.ctx === ctx && this.busGain) return;
     this.ctx = ctx;
     this.busGain = ctx.createGain();
-    this.busGain.gain.value = 0.78;
+    this.busGain.gain.value = 0.82;
     this.busGain.connect(ctx.destination);
 
-    // Pre-generate 0.18s crisp white-noise burst buffer once for percussive shatter/snare transients
-    const length = Math.max(1, Math.floor(ctx.sampleRate * 0.18));
+    // Pre-generate 0.16s ultra-crisp white-noise burst buffer once at startup
+    const length = Math.max(1, Math.floor(ctx.sampleRate * 0.16));
     const buf = ctx.createBuffer(1, length, ctx.sampleRate);
     const data = buf.getChannelData(0);
     for (let i = 0; i < length; i++) {
-      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (length * 0.28));
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (length * 0.24));
     }
     this.noiseBuffer = buf;
   }
@@ -43,17 +45,34 @@ export class SfxSynth {
     return this.mode;
   }
 
-  private scheduleTone(
+  /**
+   * 25ms rolling polyphonic density scaler (`1 / sqrt(n)`) — prevents clipping during rapid
+   * katana streams or Beat Rush mashing without ever muting/dropping any hit transient.
+   */
+  private consumePolyphonicScale(now: number): number {
+    while (this.recentHitTimes.length > 0 && now - this.recentHitTimes[0]! > 0.025) {
+      this.recentHitTimes.shift();
+    }
+    if (this.recentHitTimes.length >= 12) {
+      this.recentHitTimes.shift();
+    }
+    this.recentHitTimes.push(now);
+    return 1 / Math.sqrt(Math.max(1, this.recentHitTimes.length));
+  }
+
+  private schedulePercussiveTone(
     freqStart: number,
     freqEnd: number,
     durationSec: number,
     gainPeak: number,
     type: OscillatorType = 'triangle',
-    delaySec: number = 0
+    delaySec: number = 0,
+    attackSec: number = 0.0004
   ): void {
-    if (!this.ctx || !this.busGain || this.ctx.state !== 'running') return;
+    if (!this.ctx || !this.busGain || this.ctx.state !== 'running' || gainPeak <= 0.0002) return;
     const t0 = this.ctx.currentTime + delaySec;
-    const t1 = t0 + durationSec;
+    const tAtk = t0 + Math.max(0.0003, attackSec);
+    const t1 = t0 + Math.max(0.008, durationSec);
 
     const osc = this.ctx.createOscillator();
     const env = this.ctx.createGain();
@@ -64,162 +83,202 @@ export class SfxSynth {
     }
 
     env.gain.setValueAtTime(0.0001, t0);
-    env.gain.linearRampToValueAtTime(gainPeak, t0 + 0.006);
+    env.gain.linearRampToValueAtTime(gainPeak, tAtk);
     env.gain.exponentialRampToValueAtTime(0.0001, t1);
 
     osc.connect(env);
     env.connect(this.busGain);
     osc.start(t0);
-    osc.stop(t1 + 0.01);
+    osc.stop(t1 + 0.008);
   }
 
-  private scheduleNoiseSnap(
+  private scheduleNoiseTransient(
     cutoffHz: number,
     filterType: BiquadFilterType,
+    qFactor: number,
     durationSec: number,
-    gainPeak: number
+    gainPeak: number,
+    delaySec: number = 0
   ): void {
-    if (!this.ctx || !this.busGain || !this.noiseBuffer || this.ctx.state !== 'running') return;
-    const t0 = this.ctx.currentTime;
+    if (
+      !this.ctx ||
+      !this.busGain ||
+      !this.noiseBuffer ||
+      this.ctx.state !== 'running' ||
+      gainPeak <= 0.0002
+    ) {
+      return;
+    }
+    const t0 = this.ctx.currentTime + delaySec;
+    const tAtk = t0 + 0.0004; // 0.4ms (< 0.5ms) instant percussive attack
+    const t1 = t0 + Math.max(0.008, durationSec);
+
     const src = this.ctx.createBufferSource();
     src.buffer = this.noiseBuffer;
 
     const filter = this.ctx.createBiquadFilter();
     filter.type = filterType;
     filter.frequency.setValueAtTime(cutoffHz, t0);
-    filter.Q.setValueAtTime(1.4, t0);
+    filter.Q.setValueAtTime(qFactor, t0);
 
     const env = this.ctx.createGain();
-    env.gain.setValueAtTime(gainPeak, t0);
-    env.gain.exponentialRampToValueAtTime(0.0001, t0 + durationSec);
+    env.gain.setValueAtTime(0.0001, t0);
+    env.gain.linearRampToValueAtTime(gainPeak, tAtk);
+    env.gain.exponentialRampToValueAtTime(0.0001, t1);
 
     src.connect(filter);
     filter.connect(env);
     env.connect(this.busGain);
     src.start(t0);
-    src.stop(t0 + durationSec + 0.01);
+    src.stop(t1 + 0.008);
   }
 
   /**
-   * Subtle, non-intrusive form-linked harmonic note chime (active ONLY in `'full'` mode).
-   * Uses gentle gain (~0.085) and short decay (<95ms) so the original song remains front and center.
+   * `<0.5ms` 3-Layer Atonal Percussive Drum + Katana Slash Hit SFX:
+   * - `low`: Sub-punch kick body + low blade cut + transient click
+   * - `high`: Crisp snare crack + high steel katana edge + transient click
+   * - `chord`: Heavy dual X-cross iai impact + wide metallic draw + sub thump
    */
-  public playNoteHit(
-    form: ResonanceFormType,
+  public playSlashHit(
+    lane: SlashLane | 'chord',
     grade: JudgmentGrade,
-    bandMatched: boolean
+    isCritical: boolean = false
   ): void {
-    if (this.mode !== 'full' || !this.ctx) return;
+    if (this.mode === 'off' || !this.ctx || this.ctx.state !== 'running') return;
     if (grade === 'MISS') {
       this.playMiss();
       return;
     }
+    if (this.mode === 'impact' && lane !== 'chord' && !isCritical) {
+      return;
+    }
 
-    // Prevent dense note clusters from stacking loud transients within <35ms
-    const now = this.ctx.currentTime;
-    if (now - this.lastNoteTime < 0.035) return;
-    this.lastNoteTime = now;
+    const polyScale = this.consumePolyphonicScale(this.ctx.currentTime);
+    const gradeBoost = isCritical
+      ? 1.18
+      : grade === 'PERFECT'
+        ? 1.05
+        : grade === 'GREAT'
+          ? 0.88
+          : 0.72;
+    const scale = polyScale * gradeBoost;
 
-    const boost = grade === 'PERFECT' ? 1.15 : grade === 'GREAT' ? 0.9 : 0.7;
-    const matchShimmer = bandMatched ? 1.15 : 1.0;
+    // Layer 1: <0.5ms tactile transient click
+    this.scheduleNoiseTransient(4200, 'highpass', 1.2, 0.015, 0.14 * scale);
 
-    if (form === 'bass') {
-      this.scheduleTone(130.8, 82.4, 0.085, 0.11 * boost, 'triangle');
-      if (grade === 'PERFECT') {
-        this.scheduleTone(261.6, 392.0, 0.075, 0.055 * matchShimmer, 'sine', 0.008);
+    if (lane === 'low') {
+      // Layer 2: Punchy kick transient (172Hz -> 44Hz)
+      this.schedulePercussiveTone(172, 44, 0.068, 0.24 * scale, 'sine');
+      // Layer 3: Heavy low-blade steel cut
+      this.scheduleNoiseTransient(1480, 'bandpass', 1.8, 0.036, 0.15 * scale);
+      this.schedulePercussiveTone(960, 220, 0.042, 0.095 * scale, 'triangle');
+      if (isCritical) {
+        this.schedulePercussiveTone(1880, 520, 0.048, 0.075 * scale, 'sine', 0.003);
       }
-    } else if (form === 'synth') {
-      this.scheduleTone(523.25, 659.25, 0.08, 0.075 * boost, 'sine');
-      if (grade === 'PERFECT' || bandMatched) {
-        this.scheduleTone(1046.5, 1318.5, 0.09, 0.05 * matchShimmer, 'triangle', 0.01);
+    } else if (lane === 'high') {
+      // Layer 2: Crisp snare body + wire crack
+      this.schedulePercussiveTone(245, 112, 0.046, 0.16 * scale, 'triangle');
+      this.scheduleNoiseTransient(3300, 'highpass', 1.5, 0.048, 0.17 * scale);
+      // Layer 3: High katana steel edge (rapid pitch-sweep = zero tonal key clash)
+      this.schedulePercussiveTone(2650, 1140, 0.038, 0.095 * scale, 'triangle');
+      if (isCritical || grade === 'PERFECT') {
+        this.schedulePercussiveTone(4280, 2450, 0.046, 0.065 * scale, 'sine', 0.002);
       }
     } else {
-      this.scheduleTone(880.0, 1174.6, 0.068, 0.068 * boost, 'triangle');
-      this.scheduleNoiseSnap(6500, 'highpass', 0.035, 0.045 * boost);
+      // 'chord': Dual X-Cross Iai Finisher
+      this.schedulePercussiveTone(190, 40, 0.095, 0.26 * scale, 'sine');
+      this.scheduleNoiseTransient(2600, 'bandpass', 1.4, 0.062, 0.18 * scale);
+      this.scheduleNoiseTransient(5400, 'highpass', 1.8, 0.072, 0.15 * scale, 0.003);
+      this.schedulePercussiveTone(3100, 780, 0.075, 0.13 * scale, 'sawtooth');
+      this.schedulePercussiveTone(4400, 1680, 0.068, 0.085 * scale, 'triangle', 0.004);
     }
   }
 
-  public playJump(isSecondJump: boolean): void {
-    if (this.mode !== 'full') return;
-    if (isSecondJump) {
-      this.scheduleTone(310, 620, 0.065, 0.065, 'sine');
-    } else {
-      this.scheduleTone(195, 390, 0.06, 0.06, 'triangle');
-    }
+  public playAirSwing(lane: SlashLane | 'chord'): void {
+    if (this.mode !== 'full' || !this.ctx || this.ctx.state !== 'running') return;
+    const polyScale = this.consumePolyphonicScale(this.ctx.currentTime);
+    const cutoff = lane === 'high' ? 2900 : lane === 'low' ? 1450 : 2200;
+    this.scheduleNoiseTransient(cutoff, 'bandpass', 1.6, 0.042, 0.068 * polyScale);
+    this.schedulePercussiveTone(
+      lane === 'high' ? 1250 : 780,
+      lane === 'high' ? 420 : 240,
+      0.038,
+      0.045 * polyScale,
+      'triangle'
+    );
   }
 
-  public playJumpPad(): void {
-    if (this.mode === 'off') return;
-    this.scheduleTone(240, 720, 0.14, 0.14, 'triangle');
-    this.scheduleTone(480, 960, 0.12, 0.09, 'sine', 0.025);
+  public playHoldTick(): void {
+    if (this.mode !== 'full' || !this.ctx || this.ctx.state !== 'running') return;
+    const polyScale = this.consumePolyphonicScale(this.ctx.currentTime);
+    this.scheduleNoiseTransient(5200, 'highpass', 1.8, 0.016, 0.055 * polyScale);
+    this.schedulePercussiveTone(1850, 920, 0.022, 0.04 * polyScale, 'sine');
   }
 
-  public playSlamImpact(): void {
-    if (this.mode === 'off') return;
-    this.scheduleTone(155, 42, 0.18, 0.22, 'sawtooth');
-    this.scheduleTone(330, 880, 0.15, 0.12, 'triangle', 0.02);
-    this.scheduleNoiseSnap(1800, 'bandpass', 0.12, 0.16);
+  public playRushHit(step: number): void {
+    if (this.mode === 'off' || !this.ctx || this.ctx.state !== 'running') return;
+    const polyScale = this.consumePolyphonicScale(this.ctx.currentTime);
+    const clampedStep = Math.max(1, Math.min(12, step));
+    const startHz = 1150 + clampedStep * 145;
+    this.scheduleNoiseTransient(3800, 'highpass', 1.5, 0.028, 0.13 * polyScale);
+    this.schedulePercussiveTone(startHz, 340, 0.044, 0.14 * polyScale, 'triangle');
+    this.schedulePercussiveTone(165, 52, 0.042, 0.12 * polyScale, 'sine');
   }
 
-  public playDashRing(): void {
-    if (this.mode === 'off') return;
-    this.scheduleTone(523.25, 783.99, 0.11, 0.12, 'triangle');
-    this.scheduleTone(783.99, 1046.5, 0.13, 0.11, 'sine', 0.03);
-    this.scheduleNoiseSnap(4200, 'highpass', 0.07, 0.08);
+  public playCleanDodge(): void {
+    if (this.mode === 'off' || !this.ctx || this.ctx.state !== 'running') return;
+    const polyScale = this.consumePolyphonicScale(this.ctx.currentTime);
+    this.scheduleNoiseTransient(4800, 'highpass', 2.0, 0.032, 0.075 * polyScale);
+    this.schedulePercussiveTone(1420, 2180, 0.045, 0.06 * polyScale, 'sine');
   }
 
   public playHazardShatter(): void {
-    if (this.mode === 'off') return;
-    this.scheduleNoiseSnap(2800, 'bandpass', 0.13, 0.18);
-    this.scheduleTone(180, 62, 0.12, 0.16, 'triangle');
-    this.scheduleTone(740, 1180, 0.09, 0.09, 'sine', 0.012);
-  }
-
-  public playBladeSlash(): void {
-    if (this.mode === 'off') return;
-    this.scheduleNoiseSnap(4600, 'highpass', 0.055, 0.14);
-    this.scheduleTone(1480, 320, 0.075, 0.13, 'triangle');
-    this.scheduleTone(2200, 680, 0.05, 0.07, 'sine', 0.008);
+    if (this.mode === 'off' || !this.ctx || this.ctx.state !== 'running') return;
+    const polyScale = this.consumePolyphonicScale(this.ctx.currentTime);
+    this.scheduleNoiseTransient(2800, 'bandpass', 1.3, 0.11, 0.19 * polyScale);
+    this.schedulePercussiveTone(185, 46, 0.11, 0.2 * polyScale, 'triangle');
+    this.schedulePercussiveTone(2400, 620, 0.075, 0.11 * polyScale, 'sawtooth', 0.004);
   }
 
   public playPrismStar(): void {
-    if (this.mode === 'off') return;
-    const notes = [587.33, 783.99, 1174.66, 1567.98];
-    for (let i = 0; i < notes.length; i++) {
-      this.scheduleTone(notes[i]!, notes[i]! * 1.02, 0.14, 0.1, 'sine', i * 0.032);
-    }
+    if (this.mode === 'off' || !this.ctx || this.ctx.state !== 'running') return;
+    const polyScale = this.consumePolyphonicScale(this.ctx.currentTime);
+    this.scheduleNoiseTransient(6200, 'highpass', 1.8, 0.045, 0.11 * polyScale);
+    this.schedulePercussiveTone(1760, 2640, 0.065, 0.085 * polyScale, 'sine');
+    this.schedulePercussiveTone(2640, 3520, 0.075, 0.07 * polyScale, 'triangle', 0.022);
   }
 
   public playOverdriveBurst(): void {
-    if (this.mode === 'off') return;
-    this.scheduleTone(110, 55, 0.22, 0.2, 'sawtooth');
-    const chord = [440, 554.37, 659.25, 880, 1318.5];
-    for (let i = 0; i < chord.length; i++) {
-      this.scheduleTone(chord[i]!, chord[i]! * 1.01, 0.24, 0.09, 'triangle', i * 0.024);
-    }
-    this.scheduleNoiseSnap(3500, 'highpass', 0.15, 0.13);
+    if (this.mode === 'off' || !this.ctx || this.ctx.state !== 'running') return;
+    const polyScale = this.consumePolyphonicScale(this.ctx.currentTime);
+    this.schedulePercussiveTone(135, 42, 0.18, 0.24 * polyScale, 'sawtooth');
+    this.scheduleNoiseTransient(3600, 'highpass', 1.4, 0.13, 0.16 * polyScale);
+    this.schedulePercussiveTone(1200, 2800, 0.12, 0.11 * polyScale, 'triangle', 0.008);
   }
 
   public playMiss(): void {
-    if (this.mode === 'off') return;
-    this.scheduleTone(145, 52, 0.17, 0.18, 'sawtooth');
-    this.scheduleNoiseSnap(650, 'lowpass', 0.12, 0.14);
+    if (this.mode === 'off' || !this.ctx || this.ctx.state !== 'running') return;
+    this.schedulePercussiveTone(145, 50, 0.15, 0.17, 'sawtooth', 0, 0.001);
+    this.scheduleNoiseTransient(640, 'lowpass', 1.2, 0.1, 0.13);
   }
 
   public playStageFail(): void {
-    if (this.mode === 'off') return;
-    this.scheduleTone(340, 48, 0.42, 0.16, 'sawtooth');
-    this.scheduleTone(220, 36, 0.46, 0.14, 'triangle', 0.03);
-    this.scheduleNoiseSnap(420, 'lowpass', 0.22, 0.14);
+    if (this.mode === 'off' || !this.ctx || this.ctx.state !== 'running') return;
+    this.schedulePercussiveTone(320, 44, 0.4, 0.17, 'sawtooth', 0, 0.002);
+    this.schedulePercussiveTone(210, 34, 0.44, 0.14, 'triangle', 0.025, 0.002);
+    this.scheduleNoiseTransient(420, 'lowpass', 1.1, 0.22, 0.14);
   }
 
   public playSkinUnlock(): void {
-    if (this.mode === 'off') return;
-    const notes = [523.25, 659.25, 783.99, 1046.5, 1318.5];
-    for (let i = 0; i < notes.length; i++) {
-      const f = notes[i]!;
-      this.scheduleTone(f, f * 1.01, 0.22, 0.11, 'triangle', i * 0.065);
-      this.scheduleTone(f * 2, f * 2, 0.16, 0.05, 'sine', i * 0.065 + 0.015);
+    if (this.mode === 'off' || !this.ctx || this.ctx.state !== 'running') return;
+    const sweeps: ReadonlyArray<[number, number]> = [
+      [880, 1320],
+      [1320, 1760],
+      [1760, 2640],
+    ];
+    for (let i = 0; i < sweeps.length; i++) {
+      const [f0, f1] = sweeps[i]!;
+      this.schedulePercussiveTone(f0, f1, 0.14, 0.095, 'triangle', i * 0.055, 0.002);
     }
   }
 }

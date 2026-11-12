@@ -21,6 +21,7 @@ export interface TvgShapePool {
   prismStars: TvgShape;
   timingRings: TvgShape;
   traps: TvgShape;
+  reticles: TvgShape;
   effects: TvgShape;
   playerGlow: TvgShape;
   playerCore: TvgShape;
@@ -29,6 +30,9 @@ export interface TvgShapePool {
   vfxGold: TvgShape;
   vfxCyan: TvgShape;
   vfxCrimson: TvgShape;
+  vfxSlicedGold: TvgShape;
+  vfxSlicedCyan: TvgShape;
+  vfxSlicedCrimson: TvgShape;
   vfxSlashGold: TvgShape;
   vfxSlashCyan: TvgShape;
   vfxSlashCrimson: TvgShape;
@@ -36,20 +40,21 @@ export interface TvgShapePool {
 }
 
 /**
- * Resets all world & VFX shape layers so scene switches (`Gameplay` <-> `Preview`)
- * never leave stale vector paths on screen.
+ * Resets all world & reticle shape layers and clears fill paint (`fill(0, 0, 0, 0)`)
+ * so scene switches (`Gameplay` <-> `Preview`) never leave stale vector paths or WASM paint bleed.
  */
 export function resetWorldShapeLayers(shapes: TvgShapePool): void {
-  shapes.aurora.reset();
-  shapes.waveFill.reset();
-  shapes.spectrum.reset();
-  shapes.waveGlow.reset();
-  shapes.waveCore.reset();
-  shapes.bandBass.reset();
-  shapes.bandSynth.reset();
-  shapes.bandTreble.reset();
-  shapes.gimmicks.reset();
-  shapes.prismStars.reset();
-  shapes.timingRings.reset();
-  shapes.traps.reset();
+  shapes.aurora.reset().fill(0, 0, 0, 0);
+  shapes.waveFill.reset().fill(0, 0, 0, 0);
+  shapes.spectrum.reset().fill(0, 0, 0, 0);
+  shapes.waveGlow.reset().fill(0, 0, 0, 0);
+  shapes.waveCore.reset().fill(0, 0, 0, 0);
+  shapes.bandBass.reset().fill(0, 0, 0, 0);
+  shapes.bandSynth.reset().fill(0, 0, 0, 0);
+  shapes.bandTreble.reset().fill(0, 0, 0, 0);
+  shapes.gimmicks.reset().fill(0, 0, 0, 0);
+  shapes.prismStars.reset().fill(0, 0, 0, 0);
+  shapes.timingRings.reset().fill(0, 0, 0, 0);
+  shapes.traps.reset().fill(0, 0, 0, 0);
+  shapes.reticles.reset().fill(0, 0, 0, 0);
 }

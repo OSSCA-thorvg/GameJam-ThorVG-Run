@@ -16,6 +16,7 @@ import { LANGUAGE_LABELS, type Lang } from '../i18n/messages';
 import {
   CREWMATE_SKIN_CONFIG,
   CREWMATE_SKIN_ORDER,
+  DIFFICULTY_CONFIG,
   FORM_CONFIG,
   type CrewmateSkinId,
   type DifficultyMode,
@@ -43,12 +44,6 @@ interface StartScreenProps {
 }
 
 const LANGS: Lang[] = ['en', 'ko'];
-
-const DIFFICULTY_ACCENTS: Record<DifficultyMode, string> = {
-  easy: '#05D5FF',
-  normal: '#FFE600',
-  hard: '#FF2A6D',
-};
 
 export const StartScreen: React.FC<StartScreenProps> = ({
   selectedTrack,
@@ -261,7 +256,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
           </div>
         </section>
 
-        {/* 3. Select Crewmate Playstyle */}
+        {/* 3. Select Katana Combat Style */}
         <section className="menu-section">
           <h2>{t.menu.formSection}</h2>
           <div className="playstyle-tabs" role="radiogroup" aria-label={t.menu.formSection}>
@@ -304,12 +299,12 @@ export const StartScreen: React.FC<StartScreenProps> = ({
           </div>
         </section>
 
-        {/* 4. Select Difficulty & Rhythm Speed */}
+        {/* 4. Select Difficulty & Slash Speed */}
         <section className="menu-section">
           <h2>{t.menu.difficultySection}</h2>
           <div className="difficulty-tabs" role="radiogroup" aria-label={t.menu.difficultySection}>
             {(['easy', 'normal', 'hard'] as DifficultyMode[]).map((modeKey) => {
-              const accent = DIFFICULTY_ACCENTS[modeKey];
+              const accent = DIFFICULTY_CONFIG[modeKey].colorHex;
               const info = t.difficulties[modeKey];
               const active = difficulty === modeKey;
               const modeRec = getTrackRecord(selectedTrack, modeKey);
@@ -411,19 +406,35 @@ export const StartScreen: React.FC<StartScreenProps> = ({
           >
             {engineReady ? t.menu.start : t.menu.initializing}
           </button>
-          <div className="controls-hint">
-            <span>
-              <strong>{t.menu.controls.jumpKey}</strong>: {t.menu.controls.jumpDesc}
-            </span>
-            <span>
-              <strong>{t.menu.controls.diveKey}</strong>: {t.menu.controls.diveDesc}
-            </span>
-            <span>
-              <strong>{t.menu.controls.skillKey}</strong>: {t.menu.controls.skillDesc}
-            </span>
-            <span>
-              <strong>{t.menu.controls.swapKey}</strong>: {t.menu.controls.swapDesc}
-            </span>
+          <div className="controls-pill-grid" data-testid="menu-controls-guide">
+            <div className="control-guide-pill tone-cyan">
+              <div className="control-pill-top">
+                <span className="control-lane-tag">{t.menu.controls.highTag}</span>
+                <strong>{t.menu.controls.highKey}</strong>
+              </div>
+              <small>{t.menu.controls.highDesc}</small>
+            </div>
+            <div className="control-guide-pill tone-crimson">
+              <div className="control-pill-top">
+                <span className="control-lane-tag">{t.menu.controls.lowTag}</span>
+                <strong>{t.menu.controls.lowKey}</strong>
+              </div>
+              <small>{t.menu.controls.lowDesc}</small>
+            </div>
+            <div className="control-guide-pill tone-gold">
+              <div className="control-pill-top">
+                <span className="control-lane-tag">{t.menu.controls.chordTag}</span>
+                <strong>{t.menu.controls.chordKey}</strong>
+              </div>
+              <small>{t.menu.controls.chordDesc}</small>
+            </div>
+            <div className="control-guide-pill tone-neutral">
+              <div className="control-pill-top">
+                <span className="control-lane-tag">{t.menu.controls.utilTag}</span>
+                <strong>{t.menu.controls.utilKey}</strong>
+              </div>
+              <small>{t.menu.controls.utilDesc}</small>
+            </div>
           </div>
         </footer>
       </div>

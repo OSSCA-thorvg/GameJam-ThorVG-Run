@@ -3,7 +3,6 @@ import ThorVG, {
   type Animation as TvgAnimation,
   type AnimationInfo,
   type Canvas as TvgCanvas,
-  type Shape as TvgShape,
 } from '@thorvg/webcanvas';
 import wasmUrl from '@thorvg/webcanvas/dist/thorvg.wasm?url';
 import splashLottie from '../logo/powred.by.thorvg.1.json?raw';
@@ -19,7 +18,10 @@ import {
 import { buildCharacterMatrix } from './characterMatrix';
 import { renderMacroWorldPass } from './passes/macroWorldPass';
 import {
+  appendCutSeamQuad,
+  appendHalfPolygonShard,
   appendSkinAfterimagePath,
+  appendTaperedBlade,
   drawCrewmateSkinOrnaments,
   drawPlayerPolygon,
 } from './passes/playerGeometry';
@@ -61,53 +63,6 @@ const CREW_HEIGHT_RATIO = 2.6;
  * over all 27 frames, measured by rendering each frame with ThorVG SwCanvas.
  */
 const CREW_BOX: ContentBox = { x: 181, y: 169, width: 145, height: 192 };
-
-/**
- * Appends a razor-sharp 3rd-order Bezier tapered vector blade (zero thickness at both tips
- * `P0` and `P1`, arched mid-body along `curveBend`) with consistent NonZero winding so
- * intersecting `'cross'` / `'slam'` arcs never XOR-cancel at their centers.
- */
-function appendTaperedBlade(
-  shape: TvgShape,
-  cx: number,
-  cy: number,
-  angle: number,
-  halfLen: number,
-  halfThick: number,
-  curveBend: number
-): void {
-  if (halfLen < 0.5 || halfThick < 0.2) return;
-
-  const ux = Math.cos(angle);
-  const uy = Math.sin(angle);
-  const nx = -uy;
-  const ny = ux;
-
-  const p0x = cx - ux * halfLen;
-  const p0y = cy - uy * halfLen;
-  const p1x = cx + ux * halfLen;
-  const p1y = cy + uy * halfLen;
-
-  const ctrlU = 0.36 * halfLen;
-  const upperN = halfThick * 1.18 + curveBend;
-  const lowerN = -halfThick * 1.05 + curveBend * 0.58;
-
-  const u1x = cx - ux * ctrlU + nx * upperN;
-  const u1y = cy - uy * ctrlU + ny * upperN;
-  const u2x = cx + ux * ctrlU + nx * upperN;
-  const u2y = cy + uy * ctrlU + ny * upperN;
-
-  const l1x = cx + ux * ctrlU + nx * lowerN;
-  const l1y = cy + uy * ctrlU + ny * lowerN;
-  const l2x = cx - ux * ctrlU + nx * lowerN;
-  const l2y = cy - uy * ctrlU + ny * lowerN;
-
-  shape
-    .moveTo(p0x, p0y)
-    .cubicTo(u1x, u1y, u2x, u2y, p1x, p1y)
-    .cubicTo(l1x, l1y, l2x, l2y, p0x, p0y)
-    .close();
-}
 
 /**
  * ThorVG WebAssembly Vector Graphics Lifecycle Facade:
@@ -194,6 +149,7 @@ export class ThorVGRenderer {
         prismStars: new TVG.Shape(),
         timingRings: new TVG.Shape(),
         traps: new TVG.Shape(),
+        reticles: new TVG.Shape(),
         effects: new TVG.Shape(),
         playerGlow: new TVG.Shape(),
         playerCore: new TVG.Shape(),
@@ -202,6 +158,9 @@ export class ThorVGRenderer {
         vfxGold: new TVG.Shape(),
         vfxCyan: new TVG.Shape(),
         vfxCrimson: new TVG.Shape(),
+        vfxSlicedGold: new TVG.Shape(),
+        vfxSlicedCyan: new TVG.Shape(),
+        vfxSlicedCrimson: new TVG.Shape(),
         vfxSlashGold: new TVG.Shape(),
         vfxSlashCyan: new TVG.Shape(),
         vfxSlashCrimson: new TVG.Shape(),
@@ -210,15 +169,20 @@ export class ThorVGRenderer {
       this.shapes = shapes;
 
       // Configure hardware/software additive neon bloom (`BlendMethod.Add`) once at init (zero per-frame alloc!)
+      // NOTE (`[Fix 6]`): `vfxSliced*` MUST retain default `NonZero` (`FillRule.Winding`) — NEVER set `EvenOdd`!
       const addBlend = TVG.BlendMethod.Add;
       shapes.aurora.blend(addBlend);
       shapes.waveGlow.blend(addBlend);
       shapes.timingRings.blend(addBlend);
+      shapes.reticles.blend(addBlend);
       shapes.playerGlow.blend(addBlend);
       shapes.skinFrontGlow.blend(addBlend);
       shapes.vfxGold.blend(addBlend);
       shapes.vfxCyan.blend(addBlend);
       shapes.vfxCrimson.blend(addBlend);
+      shapes.vfxSlicedGold.blend(addBlend);
+      shapes.vfxSlicedCyan.blend(addBlend);
+      shapes.vfxSlicedCrimson.blend(addBlend);
       shapes.vfxSlashGold.blend(addBlend);
       shapes.vfxSlashCyan.blend(addBlend);
       shapes.vfxSlashCrimson.blend(addBlend);
@@ -239,6 +203,7 @@ export class ThorVGRenderer {
         shapes.prismStars,
         shapes.timingRings,
         shapes.traps,
+        shapes.reticles,
         shapes.effects,
         shapes.playerGlow,
         shapes.playerCore,
@@ -247,6 +212,9 @@ export class ThorVGRenderer {
         shapes.vfxGold,
         shapes.vfxCyan,
         shapes.vfxCrimson,
+        shapes.vfxSlicedGold,
+        shapes.vfxSlicedCyan,
+        shapes.vfxSlicedCrimson,
         shapes.vfxSlashGold,
         shapes.vfxSlashCyan,
         shapes.vfxSlashCrimson,
@@ -268,6 +236,7 @@ export class ThorVGRenderer {
         .add(shapes.prismStars)
         .add(shapes.timingRings)
         .add(shapes.traps)
+        .add(shapes.reticles)
         .add(shapes.effects)
         .add(shapes.playerGlow)
         .add(shapes.playerCore);
@@ -280,6 +249,9 @@ export class ThorVGRenderer {
         .add(shapes.vfxGold)
         .add(shapes.vfxCyan)
         .add(shapes.vfxCrimson)
+        .add(shapes.vfxSlicedGold)
+        .add(shapes.vfxSlicedCyan)
+        .add(shapes.vfxSlicedCrimson)
         .add(shapes.vfxSlashGold)
         .add(shapes.vfxSlashCyan)
         .add(shapes.vfxSlashCrimson)
@@ -385,20 +357,24 @@ export class ThorVGRenderer {
     const shapes = this.shapes;
     if (!shapes) return;
     shapes.bg.reset().appendRect(0, 0, this.width, this.height).fill(0, 0, 0, 255);
-    shapes.grid.reset();
+    shapes.grid.reset().fill(0, 0, 0, 0);
     resetWorldShapeLayers(shapes);
+    shapes.reticles.reset().fill(0, 0, 0, 0);
     shapes.effects.reset().fill(0, 0, 0, 0);
-    shapes.playerGlow.reset();
-    shapes.playerCore.reset();
-    shapes.skinFront.reset();
-    shapes.skinFrontGlow.reset();
-    shapes.vfxGold.reset();
-    shapes.vfxCyan.reset();
-    shapes.vfxCrimson.reset();
-    shapes.vfxSlashGold.reset();
-    shapes.vfxSlashCyan.reset();
-    shapes.vfxSlashCrimson.reset();
-    shapes.vfxSlashCore.reset();
+    shapes.playerGlow.reset().fill(0, 0, 0, 0);
+    shapes.playerCore.reset().fill(0, 0, 0, 0);
+    shapes.skinFront.reset().fill(0, 0, 0, 0);
+    shapes.skinFrontGlow.reset().fill(0, 0, 0, 0);
+    shapes.vfxGold.reset().fill(0, 0, 0, 0);
+    shapes.vfxCyan.reset().fill(0, 0, 0, 0);
+    shapes.vfxCrimson.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlicedGold.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlicedCyan.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlicedCrimson.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlashGold.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlashCyan.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlashCrimson.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlashCore.reset().fill(0, 0, 0, 0);
     this.hideCrewmate();
   }
 
@@ -411,20 +387,24 @@ export class ThorVGRenderer {
     if (!this.canvas || !this.tvg || !this.shapes || this.disposed) return;
     const shapes = this.shapes;
     shapes.bg.reset().appendRect(0, 0, this.width, this.height).fill(7, 9, 20, 255);
-    shapes.grid.reset();
+    shapes.grid.reset().fill(0, 0, 0, 0);
     resetWorldShapeLayers(shapes);
+    shapes.reticles.reset().fill(0, 0, 0, 0);
     shapes.effects.reset().fill(0, 0, 0, 0);
-    shapes.playerGlow.reset();
-    shapes.playerCore.reset();
-    shapes.skinFront.reset();
-    shapes.skinFrontGlow.reset();
-    shapes.vfxGold.reset();
-    shapes.vfxCyan.reset();
-    shapes.vfxCrimson.reset();
-    shapes.vfxSlashGold.reset();
-    shapes.vfxSlashCyan.reset();
-    shapes.vfxSlashCrimson.reset();
-    shapes.vfxSlashCore.reset();
+    shapes.playerGlow.reset().fill(0, 0, 0, 0);
+    shapes.playerCore.reset().fill(0, 0, 0, 0);
+    shapes.skinFront.reset().fill(0, 0, 0, 0);
+    shapes.skinFrontGlow.reset().fill(0, 0, 0, 0);
+    shapes.vfxGold.reset().fill(0, 0, 0, 0);
+    shapes.vfxCyan.reset().fill(0, 0, 0, 0);
+    shapes.vfxCrimson.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlicedGold.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlicedCyan.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlicedCrimson.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlashGold.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlashCyan.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlashCrimson.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlashCore.reset().fill(0, 0, 0, 0);
     this.hideCrewmate();
     if (!this.splashActive && this.splashAnim?.picture) {
       this.splashAnim.picture.visible(false);
@@ -516,14 +496,18 @@ export class ThorVGRenderer {
   ): void {
     if (!this.canvas || !this.tvg || !this.shapes || this.disposed) return;
 
-    this.shapes.skinFront.reset();
-    this.shapes.skinFrontGlow.reset();
-    this.shapes.vfxSlashGold.reset();
-    this.shapes.vfxSlashCyan.reset();
-    this.shapes.vfxSlashCrimson.reset();
-    this.shapes.vfxSlashCore.reset();
+    this.shapes.reticles.reset().fill(0, 0, 0, 0);
+    this.shapes.skinFront.reset().fill(0, 0, 0, 0);
+    this.shapes.skinFrontGlow.reset().fill(0, 0, 0, 0);
+    this.shapes.vfxSlicedGold.reset().fill(0, 0, 0, 0);
+    this.shapes.vfxSlicedCyan.reset().fill(0, 0, 0, 0);
+    this.shapes.vfxSlicedCrimson.reset().fill(0, 0, 0, 0);
+    this.shapes.vfxSlashGold.reset().fill(0, 0, 0, 0);
+    this.shapes.vfxSlashCyan.reset().fill(0, 0, 0, 0);
+    this.shapes.vfxSlashCrimson.reset().fill(0, 0, 0, 0);
+    this.shapes.vfxSlashCore.reset().fill(0, 0, 0, 0);
 
-    const { playerX, playerY, runCycle } = renderMenuPreviewPass(
+    const { playerX, playerY, runCycle, playerLane, playerRotation } = renderMenuPreviewPass(
       this.shapes,
       this.width,
       this.height,
@@ -535,14 +519,14 @@ export class ThorVGRenderer {
     const heightPx = 24 * CREW_HEIGHT_RATIO;
     const cy = this.crewAnim ? playerY + 24 - heightPx / 2 : playerY;
 
-    // 3 semi-transparent trail ghosts behind the preview Crewmate (x = 86, 64, 42 at 1280px -> never clips < 0)
+    // 3 semi-transparent trail ghosts behind the preview Crewmate (never clips < 0)
     const trailOffsets = [22, 44, 66] as const;
     for (let idx = 0; idx < trailOffsets.length; idx++) {
       const offset = trailOffsets[idx]!;
       const gx = playerX - offset;
       const gy = cy + Math.sin(timeSec * 7.5 - idx * 0.9) * 2.5;
       const gRadius = 20 * (1 - idx * 0.16);
-      const gRot = previewSkin === 'flawless' ? 0 : timeSec * 1.8 + idx * 0.35;
+      const gRot = previewSkin === 'flawless' ? playerRotation : timeSec * 1.8 + idx * 0.35;
       appendSkinAfterimagePath(
         this.shapes.effects,
         gx,
@@ -573,18 +557,19 @@ export class ThorVGRenderer {
         cx: playerX,
         cy,
         radius: 24,
-        rotation: 0,
+        rotation: playerRotation,
         form: previewForm,
         skinId: previewSkin,
         alphaRatio: 1,
         combo: previewSkin === 'grandmaster' ? 30 : 1,
         timeSec,
         overdriveActive: false,
+        playerLane,
       });
-      this.drawCrewmate(playerX, cy, heightPx, 0, 1, runCycle, 255);
+      this.drawCrewmate(playerX, cy, heightPx, playerRotation, 1, runCycle, 255);
     } else {
-      this.shapes.skinFront.reset();
-      this.shapes.skinFrontGlow.reset();
+      this.shapes.skinFront.reset().fill(0, 0, 0, 0);
+      this.shapes.skinFrontGlow.reset().fill(0, 0, 0, 0);
       drawPlayerPolygon(
         this.shapes.playerGlow,
         this.shapes.playerCore,
@@ -618,7 +603,7 @@ export class ThorVGRenderer {
     const ty = (y: number) => fy + (y - panY - fy) * zoom + syOff;
     const invTx = (sx: number) => panX + fx + (sx - sxOff - fx) / zoom;
     const invTy = (sy: number) => panY + fy + (sy - syOff - fy) / zoom;
-    // Linear up to 48x so calm close-up (1.42x) * 20.0x paused user zoom (28.4x) has 0.0px foot-to-floor error, while extreme zoom remains bounded on CPU SwCanvas
+    // Linear up to 48x so calm close-up (1.42x) * 20.0x paused user zoom (28.4x) has 0.0px error
     const ts = (s: number) => s * Math.min(zoom, 48);
 
     // 1. Background
@@ -634,7 +619,7 @@ export class ThorVGRenderer {
       );
 
     // 2. Dynamic Speed Grid (Inverse-projected full-viewport adaptive vector grid)
-    shapes.grid.reset();
+    shapes.grid.reset().fill(0, 0, 0, 0);
     let gridStep = 80;
     while (gridStep * zoom < 28) gridStep *= 2;
     while (gridStep * zoom > 220 && gridStep > 20) gridStep *= 0.5;
@@ -659,19 +644,23 @@ export class ThorVGRenderer {
       color: [40, 65, 110, 82],
     });
 
+    // `renderMacroWorldPass` resets all world layers including `shapes.reticles.reset().fill(0, 0, 0, 0)`
     renderMacroWorldPass(shapes, state, tx, ty, ts);
 
     // 3. Afterimage Trails, Speed Lines (`effects`) & 3-Color Additive Shockwaves + Diamond Shards (`vfx*`)
-    shapes.effects.reset();
-    shapes.skinFront.reset();
-    shapes.skinFrontGlow.reset();
-    shapes.vfxGold.reset();
-    shapes.vfxCyan.reset();
-    shapes.vfxCrimson.reset();
-    shapes.vfxSlashGold.reset();
-    shapes.vfxSlashCyan.reset();
-    shapes.vfxSlashCrimson.reset();
-    shapes.vfxSlashCore.reset();
+    shapes.effects.reset().fill(0, 0, 0, 0);
+    shapes.skinFront.reset().fill(0, 0, 0, 0);
+    shapes.skinFrontGlow.reset().fill(0, 0, 0, 0);
+    shapes.vfxGold.reset().fill(0, 0, 0, 0);
+    shapes.vfxCyan.reset().fill(0, 0, 0, 0);
+    shapes.vfxCrimson.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlicedGold.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlicedCyan.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlicedCrimson.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlashGold.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlashCyan.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlashCrimson.reset().fill(0, 0, 0, 0);
+    shapes.vfxSlashCore.reset().fill(0, 0, 0, 0);
 
     let hasEffects = false;
     let hasGold = false;
@@ -695,7 +684,6 @@ export class ThorVGRenderer {
       const target = pickVfxBucket(sw.color);
       const rOuter = Math.max(2.5, ts(sw.radius));
       const rInner = Math.max(1.2, rOuter - Math.max(1.2, ts(3.2)));
-      // Append thin ring path so fill() paints both shockwaves & diamond shards in one additive pass!
       target.appendCircle(tx(sw.x), ty(sw.y), rOuter, rOuter);
       target.appendCircle(tx(sw.x), ty(sw.y), rInner, rInner);
     }
@@ -716,13 +704,14 @@ export class ThorVGRenderer {
 
     const surfMomentum = state.surfMomentum ?? 0;
     const isOverdrive = Boolean(state.overdriveActive);
-    if (isOverdrive || surfMomentum > 0.38 || state.isDashing || state.isGrinding) {
+    const slashBurst = Math.max(state.reticlePulseHigh, state.reticlePulseLow);
+    if (isOverdrive || surfMomentum > 0.38 || state.isGrinding || slashBurst > 0.45) {
       const lineCount = isOverdrive
         ? 12
-        : state.isDashing
-          ? 9
-          : state.isGrinding
-            ? 7
+        : state.isGrinding
+          ? 8
+          : slashBurst > 0.45
+            ? 6
             : Math.floor(surfMomentum * 7);
       for (let i = 0; i < lineCount; i++) {
         const seed = (i * 197 + Math.floor(state.timeSec * 22)) % 100;
@@ -748,17 +737,23 @@ export class ThorVGRenderer {
         });
     }
 
-    // 4. Player Character (Crewmate Lottie + Procedural Vector Suit Ornaments, or Form Polygon fallback)
+    // 4. Player Character (Crewmate Lottie + 4 Vector Skins & Agile Katana Stance, or Polygon fallback)
     const isInvulnerable = state.invulnerableTimer > 0 && !isOverdrive;
     const blink = isInvulnerable && Math.floor(state.timeSec * 12) % 2 === 0;
     const alphaRatio = blink ? 0.35 : isInvulnerable ? 0.65 : 1.0;
     const px = tx(state.playerScreenX);
     const py = ty(state.playerScreenY);
     const combo = state.combo ?? 1;
+    const stanceRotation =
+      Math.abs(state.playerRotation) > 0.001
+        ? state.playerRotation
+        : state.playerLane === 'high'
+          ? 0.05
+          : 0.08;
+
     if (this.crewAnim) {
       const heightPx = pr * CREW_HEIGHT_RATIO;
       const cx = px;
-      const rotation = state.playerRotation;
       const cy = py + pr - heightPx / 2;
       drawCrewmateSkinOrnaments({
         playerGlowShape: shapes.playerGlow,
@@ -768,25 +763,26 @@ export class ThorVGRenderer {
         cx,
         cy,
         radius: pr,
-        rotation,
+        rotation: stanceRotation,
         form: activeForm,
         skinId: activeSkin,
         alphaRatio,
         combo,
         timeSec: state.timeSec,
         overdriveActive: isOverdrive,
+        playerLane: state.playerLane,
       });
-      this.drawCrewmate(cx, cy, heightPx, rotation, 1, state.runCycleTime, blink ? 90 : 255);
+      this.drawCrewmate(cx, cy, heightPx, stanceRotation, 1, state.runCycleTime, blink ? 90 : 255);
     } else {
-      shapes.skinFront.reset();
-      shapes.skinFrontGlow.reset();
+      shapes.skinFront.reset().fill(0, 0, 0, 0);
+      shapes.skinFrontGlow.reset().fill(0, 0, 0, 0);
       drawPlayerPolygon(
         shapes.playerGlow,
         shapes.playerCore,
         px,
         py,
         pr,
-        state.playerRotation,
+        stanceRotation,
         activeForm,
         alphaRatio,
         false,
@@ -829,12 +825,80 @@ export class ThorVGRenderer {
         .stroke({ width: vfxStrokeW, color: [255, 200, 220, 235] });
     }
 
-    // 6. Pure 3rd-Order Bezier Tapered Vector Blades (`vfxSlash*` — NonZero additive winding)
+    // 6. Pure Vector Polygon Slicing (`state.slicedHalves` -> `vfxSliced*` strictly NonZero + `vfxSlashCore` cut seam)
+    let slicedGoldAlpha = 0;
+    let slicedCyanAlpha = 0;
+    let slicedCrimsonAlpha = 0;
     let hasSlashGold = false;
     let hasSlashCyan = false;
     let hasSlashCrimson = false;
     let hasSlashCore = false;
 
+    for (let i = 0; i < state.slicedHalves.length; i += 1) {
+      const h = state.slicedHalves[i]!;
+      const progress = Math.min(
+        1,
+        Math.max(0, 1 - Math.max(0, h.life / Math.max(0.001, h.maxLife)))
+      );
+      const alpha = Math.round(255 * Math.pow(1 - progress, 0.75));
+      if (alpha <= 2) continue;
+
+      const cx = tx(h.x);
+      const cy = ty(h.y);
+      const r = ts(h.radius);
+      if (r < 0.6) continue;
+
+      const isGoldHalf =
+        Boolean(h.isPrismStar) || (h.color[0] >= 200 && h.color[1] >= 180);
+      const isCyanHalf = !isGoldHalf && h.color[2] >= 180 && h.color[0] < 160;
+      const shardTarget = isGoldHalf
+        ? shapes.vfxSlicedGold
+        : isCyanHalf
+          ? shapes.vfxSlicedCyan
+          : shapes.vfxSlicedCrimson;
+
+      if (isGoldHalf) slicedGoldAlpha = Math.max(slicedGoldAlpha, alpha);
+      else if (isCyanHalf) slicedCyanAlpha = Math.max(slicedCyanAlpha, alpha);
+      else slicedCrimsonAlpha = Math.max(slicedCrimsonAlpha, alpha);
+
+      appendHalfPolygonShard(shardTarget, cx, cy, r, h.cutAngle, h.side);
+
+      // Razor-sharp bright white glowing cut-seam bar during first 70% of shard life
+      if (progress < 0.70) {
+        const seamRatio = 1 - progress / 0.70;
+        const seamThick = Math.max(0.85, ts(0.85 + 2.5 * seamRatio));
+        appendCutSeamQuad(
+          shapes.vfxSlashCore,
+          cx,
+          cy,
+          r,
+          h.cutAngle,
+          h.side,
+          seamThick,
+          1.05 + 0.12 * seamRatio
+        );
+        hasSlashCore = true;
+      }
+    }
+
+    const slicedStrokeW = Math.max(1.0, Math.min(5.0, ts(1.85)));
+    if (slicedGoldAlpha > 0) {
+      shapes.vfxSlicedGold
+        .fill(255, 226, 48, Math.round(slicedGoldAlpha * 0.9))
+        .stroke({ width: slicedStrokeW, color: [255, 252, 200, slicedGoldAlpha] });
+    }
+    if (slicedCyanAlpha > 0) {
+      shapes.vfxSlicedCyan
+        .fill(5, 213, 255, Math.round(slicedCyanAlpha * 0.9))
+        .stroke({ width: slicedStrokeW, color: [210, 250, 255, slicedCyanAlpha] });
+    }
+    if (slicedCrimsonAlpha > 0) {
+      shapes.vfxSlicedCrimson
+        .fill(255, 42, 109, Math.round(slicedCrimsonAlpha * 0.9))
+        .stroke({ width: slicedStrokeW, color: [255, 205, 225, slicedCrimsonAlpha] });
+    }
+
+    // 7. Pure 3rd-Order Bezier Tapered Vector Blades (`vfxSlash*` — NonZero additive winding)
     const pickSlashBucket = (rgb: [number, number, number]) => {
       if (rgb[0] >= 200 && rgb[1] >= 180) {
         hasSlashGold = true;

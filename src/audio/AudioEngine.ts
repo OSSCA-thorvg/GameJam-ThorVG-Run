@@ -1,5 +1,10 @@
 import type { FrequencyBands, SfxMode, TrackMetadata } from '../types/game';
-import { loadSfxMode, saveSfxMode } from '../engine/recordsStore';
+import {
+  loadAudioOffsetMs,
+  loadSfxMode,
+  saveAudioOffsetMs,
+  saveSfxMode,
+} from '../engine/recordsStore';
 import {
   AudioLoadError,
   MAX_UPLOAD_BYTES,
@@ -11,9 +16,14 @@ import {
 import { BUILT_IN_TRACKS, createFallbackBuffer } from './proceduralTracks';
 import { SfxSynth } from './SfxSynth';
 
+const BASE_SONG_GAIN = 0.85;
+
 /**
- * Web Audio API Engine for ThorVG Run.
+ * Web Audio API Engine for ThorVG Rhythm Slasher (`rhythm-slasher-v6`).
  * Pipeline: AudioBufferSourceNode -> AnalyserNode -> GainNode -> Destination
+ * - Low-latency interactive AudioContext + hardware `baseLatency + outputLatency` compensation
+ * - Pause-continuous `getEffectiveElapsedSec()` + `-150ms..+150ms` user audio sync offset
+ * - Click-free `triggerSidechainDuck()` on heavy `CHORD` / `RUSH` finishers
  */
 export class AudioEngine {
   public readonly sfx: SfxSynth = new SfxSynth();
@@ -31,11 +41,13 @@ export class AudioEngine {
   private isPlaying: boolean = false;
   private startTimestamp: number = 0;
   private pauseOffset: number = 0;
+  private audioOffsetMs: number = 0;
   private lastBeatTime: number = 0;
   private rollingLowAvg: number = 0.25;
 
   constructor() {
     this.sfx.setMode(loadSfxMode());
+    this.audioOffsetMs = loadAudioOffsetMs();
   }
 
   public setSfxMode(mode: SfxMode): void {
@@ -47,10 +59,25 @@ export class AudioEngine {
     return this.sfx.getMode();
   }
 
+  public setAudioOffsetMs(offsetMs: number): number {
+    this.audioOffsetMs = saveAudioOffsetMs(offsetMs);
+    return this.audioOffsetMs;
+  }
+
+  public getAudioOffsetMs(): number {
+    return this.audioOffsetMs;
+  }
+
   private ensureContext(): AudioContext {
     if (!this.ctx) {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      this.ctx = new AudioCtx();
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      try {
+        this.ctx = new AudioCtx({ latencyHint: 'interactive' });
+      } catch {
+        this.ctx = new AudioCtx();
+      }
       this.sfx.attachContext(this.ctx);
 
       this.analyserNode = this.ctx.createAnalyser();
@@ -58,7 +85,7 @@ export class AudioEngine {
       this.analyserNode.smoothingTimeConstant = 0.72;
 
       this.gainNode = this.ctx.createGain();
-      this.gainNode.gain.value = 0.85;
+      this.gainNode.gain.value = BASE_SONG_GAIN;
 
       this.analyserNode.connect(this.gainNode);
       this.gainNode.connect(this.ctx.destination);
@@ -66,6 +93,35 @@ export class AudioEngine {
       this.fftBytes = new Uint8Array(new ArrayBuffer(this.analyserNode.frequencyBinCount));
     }
     return this.ctx;
+  }
+
+  private restoreSongGain(): void {
+    if (!this.ctx || !this.gainNode) return;
+    try {
+      const now = this.ctx.currentTime;
+      const g = this.gainNode.gain;
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(BASE_SONG_GAIN, now);
+    } catch {
+      // Ignore if context is closing
+    }
+  }
+
+  /**
+   * [Fix 3] Micro sidechain ducking (`-2.1dB`, `55ms` recovery) for heavy `CHORD` & `RUSH` finishers.
+   * Uses strictly positive gain anchors (`>= 0.001`) so `exponentialRampToValueAtTime` never throws.
+   */
+  public triggerSidechainDuck(duckGain: number = 0.78, recoverySec: number = 0.055): void {
+    if (!this.ctx || !this.gainNode || !this.isPlaying || this.ctx.state !== 'running') return;
+    const now = this.ctx.currentTime;
+    const g = this.gainNode.gain;
+    g.cancelScheduledValues(now);
+    g.setValueAtTime(Math.max(0.001, g.value), now);
+    g.linearRampToValueAtTime(Math.max(0.05, BASE_SONG_GAIN * duckGain), now + 0.004);
+    g.exponentialRampToValueAtTime(
+      BASE_SONG_GAIN,
+      now + 0.004 + Math.max(0.02, recoverySec)
+    );
   }
 
   /**
@@ -171,6 +227,7 @@ export class AudioEngine {
     }
 
     this.stopSourceOnly();
+    this.restoreSongGain();
 
     const source = ctx.createBufferSource();
     source.buffer = this.currentBuffer;
@@ -197,6 +254,7 @@ export class AudioEngine {
       Math.max(0, this.ctx.currentTime - this.startTimestamp)
     );
     this.stopSourceOnly();
+    this.restoreSongGain();
     this.isPlaying = false;
   }
 
@@ -219,6 +277,7 @@ export class AudioEngine {
     }
 
     this.stopSourceOnly();
+    this.restoreSongGain();
 
     const source = ctx.createBufferSource();
     source.buffer = this.currentBuffer;
@@ -241,6 +300,7 @@ export class AudioEngine {
 
   public stop(): void {
     this.stopSourceOnly();
+    this.restoreSongGain();
     this.isPlaying = false;
     this.pauseOffset = 0;
   }
@@ -294,7 +354,7 @@ export class AudioEngine {
     const nowMs = performance.now();
     this.rollingLowAvg = this.rollingLowAvg * 0.92 + low * 0.08;
     const isBeat =
-      low > Math.max(0.32, this.rollingLowAvg * 1.24) && nowMs - this.lastBeatTime > 230;
+      low > Math.max(0.32, this.rollingLowAvg * 1.24) && nowMs - this.lastBeatTime > 190;
     if (isBeat) {
       this.lastBeatTime = nowMs;
     }
@@ -302,9 +362,34 @@ export class AudioEngine {
     return { low, mid, high, overall, isBeat };
   }
 
+  public getOutputLatencySec(): number {
+    if (!this.ctx) return 0;
+    const base = Number.isFinite(this.ctx.baseLatency) ? this.ctx.baseLatency : 0;
+    const maybeOut = (this.ctx as AudioContext & { outputLatency?: number }).outputLatency;
+    const out = typeof maybeOut === 'number' && Number.isFinite(maybeOut) ? maybeOut : 0;
+    return Math.min(0.12, Math.max(0, base + out));
+  }
+
+  /**
+   * Unadjusted raw playback elapsed time (used by `pause()`, `resume()`, and `getProgress()`).
+   */
   public getElapsedSec(): number {
     if (!this.ctx || !this.isPlaying) return this.pauseOffset;
     return Math.max(0, this.ctx.currentTime - this.startTimestamp);
+  }
+
+  /**
+   * [Fix 3] Pause-continuous effective playback timestamp compensated for hardware output latency
+   * and user sync offset (`+ms` delays judgment/chart relative to raw buffer clock for BT/HDMI audio).
+   * Identical formula whether playing or paused so `[Esc]` never jumps `cameraX` and live offset
+   * tweaks immediately preview note alignment on the paused canvas!
+   */
+  public getEffectiveElapsedSec(): number {
+    const rawSec =
+      this.isPlaying && this.ctx
+        ? Math.max(0, this.ctx.currentTime - this.startTimestamp)
+        : this.pauseOffset;
+    return rawSec - this.getOutputLatencySec() - this.audioOffsetMs / 1000;
   }
 
   public getDurationSec(): number {
@@ -314,7 +399,7 @@ export class AudioEngine {
   public getProgress(): number {
     const dur = this.getDurationSec();
     if (dur <= 0) return 0;
-    return Math.min(1.0, this.getElapsedSec() / dur);
+    return Math.min(1.0, Math.max(0, this.getElapsedSec() / dur));
   }
 
   public get playing(): boolean {
@@ -325,4 +410,3 @@ export class AudioEngine {
     return this.currentBuffer;
   }
 }
-

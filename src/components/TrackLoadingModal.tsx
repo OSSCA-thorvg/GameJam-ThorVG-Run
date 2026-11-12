@@ -40,13 +40,6 @@ export const TrackLoadingModal: React.FC<TrackLoadingModalProps> = ({
     });
   }, [blueprint]);
 
-  const totalGimmicksAndPlatforms = blueprint
-    ? blueprint.skyPlatforms.length +
-      blueprint.jumpPads.length +
-      blueprint.dashRings.length +
-      blueprint.holdRails.length
-    : 0;
-
   return (
     <div className="loading-modal-backdrop" role="status" aria-live="polite">
       <div className="loading-modal-card">
@@ -89,27 +82,29 @@ export const TrackLoadingModal: React.FC<TrackLoadingModalProps> = ({
         {blueprint && (
           <div className="blueprint-stats-grid">
             <div className="blueprint-stat">
-              <small>{t.loading.stats.segments}</small>
-              <strong>{blueprint.segments.length.toLocaleString()}</strong>
+              <small>{t.loading.stats.bpm}</small>
+              <strong>{Math.round(blueprint.bpm)} BPM</strong>
             </div>
             <div className="blueprint-stat">
               <small>{t.loading.stats.beats}</small>
               <strong>{blueprint.totalBeats.toLocaleString()}</strong>
             </div>
             <div className="blueprint-stat">
-              <small>{t.loading.stats.orbs}</small>
-              <strong>{blueprint.orbs.length.toLocaleString()}</strong>
+              <small>{t.loading.stats.slashTargets}</small>
+              <strong style={{ color: '#05D5FF' }}>
+                {blueprint.totalSlashTargets.toLocaleString()}
+              </strong>
             </div>
             <div className="blueprint-stat">
-              <small>{t.loading.stats.drops}</small>
+              <small>{t.loading.stats.specialTargets}</small>
               <strong style={{ color: '#FFE600' }}>
-                {totalGimmicksAndPlatforms.toLocaleString()}
+                {blueprint.totalSpecialTargets.toLocaleString()}
               </strong>
             </div>
           </div>
         )}
 
-        {/* How to Run Guide */}
+        {/* How to Slash Guide */}
         <div className="loading-tip-box">
           <strong>{t.loading.tipTitle}</strong>
           <p>{t.loading.tipBody}</p>

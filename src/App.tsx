@@ -9,7 +9,13 @@ import { StartScreen } from './components/StartScreen';
 import { TrackLoadingModal } from './components/TrackLoadingModal';
 import { GameEngine } from './engine/GameEngine';
 import { InputController } from './engine/InputController';
-import { getUnlockedSkins, loadSelectedSkin, saveSelectedSkin } from './engine/recordsStore';
+import {
+  getUnlockedSkins,
+  loadAudioOffsetMs,
+  loadSelectedSkin,
+  saveAudioOffsetMs,
+  saveSelectedSkin,
+} from './engine/recordsStore';
 import { trackTitle } from './i18n/display';
 import { useI18n } from './i18n/I18nProvider';
 import { ThorVGRenderer } from './renderer/ThorVGRenderer';
@@ -21,6 +27,7 @@ import {
   type LoadingProgress,
   type RendererMode,
   type ResonanceFormType,
+  type SlashLane,
   type TrackMetadata,
 } from './types/game';
 
@@ -89,6 +96,12 @@ const INITIAL_HUD: HUDTelemetry = {
   gimmicksTriggered: 0,
   isNewRecord: false,
   scoreDelta: 0,
+  playerLane: 'low',
+  highKeyFlash: false,
+  lowKeyFlash: false,
+  chordKeyFlash: false,
+  rushCombo: 0,
+  audioOffsetMs: 0,
 };
 
 type Screen = 'splash' | 'menu' | 'loading' | 'game';
@@ -103,6 +116,7 @@ export const App: React.FC = () => {
   const [difficulty, setDifficulty] = useState<DifficultyMode>('normal');
   const [unlockedSkins, setUnlockedSkins] = useState<CrewmateSkinId[]>(() => getUnlockedSkins());
   const [selectedSkin, setSelectedSkin] = useState<CrewmateSkinId>(() => loadSelectedSkin());
+  const [audioOffsetMs, setAudioOffsetMs] = useState<number>(() => loadAudioOffsetMs());
   const [engineReady, setEngineReady] = useState<boolean>(false);
   /** Increments each time a renderer finishes init, so loops can restart on the new instance. */
   const [rendererEpoch, setRendererEpoch] = useState<number>(0);
@@ -113,6 +127,7 @@ export const App: React.FC = () => {
     ...INITIAL_HUD,
     activeForm: playstyle,
     cinematicCamera,
+    audioOffsetMs,
   }));
   const [loadingState, setLoadingState] = useState<LoadingProgress>({
     progress: 0,
@@ -134,6 +149,8 @@ export const App: React.FC = () => {
   difficultyRef.current = difficulty;
   const selectedSkinRef = useRef<CrewmateSkinId>(selectedSkin);
   selectedSkinRef.current = selectedSkin;
+  const audioOffsetMsRef = useRef<number>(audioOffsetMs);
+  audioOffsetMsRef.current = audioOffsetMs;
   const finishedAtRef = useRef<number>(0);
   const inGameRef = useRef<boolean>(inGame);
   inGameRef.current = inGame;
@@ -161,6 +178,7 @@ export const App: React.FC = () => {
     engine.setPlaystyle(playstyle);
     engine.setCinematicCamera(cinematicCameraRef.current);
     engine.setSelectedSkin(selectedSkinRef.current);
+    engine.setAudioOffsetMs(audioOffsetMsRef.current);
     gameEngineRef.current = engine;
   }
 
@@ -177,6 +195,11 @@ export const App: React.FC = () => {
     selectedSkinRef.current = selectedSkin;
     gameEngineRef.current?.setSelectedSkin(selectedSkin);
   }, [selectedSkin]);
+
+  useEffect(() => {
+    audioOffsetMsRef.current = audioOffsetMs;
+    gameEngineRef.current?.setAudioOffsetMs(audioOffsetMs);
+  }, [audioOffsetMs]);
 
   useEffect(() => {
     if (hud.isFinished) {
@@ -209,6 +232,7 @@ export const App: React.FC = () => {
         renderer.resize(w, h);
         gameEngineRef.current?.setCinematicCamera(cinematicCameraRef.current);
         gameEngineRef.current?.setSelectedSkin(selectedSkinRef.current);
+        gameEngineRef.current?.setAudioOffsetMs(audioOffsetMsRef.current);
         gameEngineRef.current?.attachRenderer(renderer, rendererMode, w, h);
         setEngineReady(true);
         setRendererEpoch((n) => n + 1);
@@ -310,6 +334,13 @@ export const App: React.FC = () => {
     gameEngineRef.current?.resetCameraView();
   }, []);
 
+  const handleChangeAudioOffset = useCallback((next: number) => {
+    const clamped = saveAudioOffsetMs(next);
+    audioOffsetMsRef.current = clamped;
+    setAudioOffsetMs(clamped);
+    gameEngineRef.current?.setAudioOffsetMs(clamped);
+  }, []);
+
   const handleToggleCinematicCamera = useCallback(() => {
     const next = gameEngineRef.current
       ? gameEngineRef.current.toggleCinematicCamera()
@@ -370,6 +401,7 @@ export const App: React.FC = () => {
     engine.setPlaystyle(playstyle);
     engine.setCinematicCamera(cinematicCamera);
     engine.setSelectedSkin(selectedSkinRef.current);
+    engine.setAudioOffsetMs(audioOffsetMsRef.current);
     setHud((prev) => ({
       ...INITIAL_HUD,
       grooveHp: 100,
@@ -381,6 +413,7 @@ export const App: React.FC = () => {
       sfxMode: gameEngineRef.current?.getSfxMode() ?? prev.sfxMode ?? 'full',
       activeForm: playstyle,
       cinematicCamera,
+      audioOffsetMs: audioOffsetMsRef.current,
     }));
     setLoadingState({ progress: 0.06, stage: 'decoding' });
     setScreen('loading');
@@ -419,16 +452,24 @@ export const App: React.FC = () => {
   const handleStartRunRef = useRef(handleStartRun);
   handleStartRunRef.current = handleStartRun;
 
-  // Command-Pattern InputController binding keyboard & pointer controls once
+  // Command-Pattern InputController binding 2-Lane Katana Slasher keyboard & pointer controls once
   useEffect(() => {
     const controller = new InputController({
       isGameActive: () => inGameRef.current,
       isPaused: () => Boolean(gameEngineRef.current?.isPaused),
       isRunFinished: () => isFinishedRef.current,
-      onPrimaryPress: () => gameEngineRef.current?.handlePrimaryAction(),
-      onPrimaryRelease: () => gameEngineRef.current?.setJumpHeld(false),
-      onDiveHoldChange: (held) => gameEngineRef.current?.setDiveHeld(held),
-      onSecondaryPress: () => gameEngineRef.current?.handleSecondaryAction(),
+      onSlashHigh: (ts: number) => {
+        gameEngineRef.current?.handleSlashHigh(ts);
+      },
+      onSlashLow: (ts: number) => {
+        gameEngineRef.current?.handleSlashLow(ts);
+      },
+      onSlashChord: (ts: number) => {
+        gameEngineRef.current?.handleSlashChord(ts);
+      },
+      onLaneHoldChange: (lane: SlashLane | 'chord', held: boolean) => {
+        gameEngineRef.current?.setLaneHeld(lane, held);
+      },
       onActivateOverdrive: () => {
         gameEngineRef.current?.activateOverdrive();
       },
@@ -476,7 +517,15 @@ export const App: React.FC = () => {
   );
 
   return (
-    <div ref={shellRef} className="app-shell">
+    <div
+      ref={shellRef}
+      className="app-shell"
+      onContextMenu={(e) => {
+        if (inGame && !hud.isPaused && !hud.isFinished) {
+          e.preventDefault();
+        }
+      }}
+    >
       {/* Keyed by rendererMode so React cleanly replaces DOM <canvas> on CPU <-> GPU switch */}
       <canvas
         key={rendererMode}
@@ -538,6 +587,8 @@ export const App: React.FC = () => {
         <PauseOverlay
           hud={hud}
           trackTitle={trackTitle(t, selectedTrack)}
+          audioOffsetMs={audioOffsetMs}
+          onChangeAudioOffset={handleChangeAudioOffset}
           onResume={handleResumeRun}
           onReturnToMenu={handleReturnToMenu}
           onSetZoom={handleSetZoom}

@@ -13,6 +13,7 @@ const RECORDS_STORAGE_KEY = 'thorvg_run:records:v1';
 const SFX_MODE_STORAGE_KEY = 'thorvg_run:sfx_mode:v1';
 const UNLOCKED_SKINS_KEY = 'thorvg_run:unlocked_skins:v1';
 const SELECTED_SKIN_KEY = 'thorvg_run:selected_skin:v1';
+const AUDIO_OFFSET_MS_KEY = 'thorvg_run:audio_offset_ms:v1';
 
 const RANK_WEIGHT: Record<ResultRank, number> = {
   S: 4,
@@ -73,7 +74,7 @@ export function saveTrackRunResult(
   const runScore = Math.max(0, Math.floor(hud.score));
   const runRank: ResultRank = hud.rank ?? 'B';
   const runAcc = hud.accuracy ?? 0;
-  const runCombo = hud.maxCombo ?? 1;
+  const runCombo = hud.maxCombo ?? 0;
   const runStars = hud.starsCollected ?? 0;
   const runNoMiss = (hud.judgmentCounts?.miss ?? 0) === 0;
 
@@ -120,6 +121,38 @@ export function nextSfxMode(current: SfxMode): SfxMode {
   if (current === 'full') return 'impact';
   if (current === 'impact') return 'off';
   return 'full';
+}
+
+function clampAudioOffsetInt(offsetMs: number): number {
+  if (!Number.isFinite(offsetMs)) return 0;
+  const rounded = Math.round(offsetMs);
+  const clamped = Math.max(-150, Math.min(150, rounded));
+  return clamped === 0 ? 0 : clamped;
+}
+
+export function loadAudioOffsetMs(): number {
+  try {
+    const raw = window.localStorage.getItem(AUDIO_OFFSET_MS_KEY);
+    if (raw !== null && raw.trim() !== '') {
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed)) {
+        return clampAudioOffsetInt(parsed);
+      }
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return 0;
+}
+
+export function saveAudioOffsetMs(offsetMs: number): number {
+  const clamped = clampAudioOffsetInt(offsetMs);
+  try {
+    window.localStorage.setItem(AUDIO_OFFSET_MS_KEY, String(clamped));
+  } catch {
+    // Ignore storage errors
+  }
+  return clamped;
 }
 
 function isValidSkinId(v: unknown): v is CrewmateSkinId {

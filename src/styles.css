@@ -77,7 +77,7 @@ body,
   background: rgba(10, 14, 28, 0.96);
   border: 1px solid rgba(5, 213, 255, 0.35);
   border-radius: 18px;
-  padding: 9px 20px;
+  padding: 8px 20px;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.65), 0 0 36px rgba(5, 213, 255, 0.12);
 }
 
@@ -488,7 +488,7 @@ body,
 }
 
 .start-footer {
-  margin-top: 5px;
+  margin-top: 4px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -496,7 +496,7 @@ body,
 
 .start-run-btn {
   width: 100%;
-  padding: 8px 10px;
+  padding: 7px 10px;
   border-radius: 11px;
   border: none;
   font-size: 14.5px;
@@ -518,13 +518,101 @@ body,
   cursor: wait;
 }
 
-.controls-hint {
+.controls-pill-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.control-guide-pill {
   display: flex;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 3px 10px;
-  font-size: 10.5px;
-  color: #9ab0d4;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  padding: 3px 7px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  text-align: left;
+}
+
+.control-guide-pill.tone-cyan {
+  border-color: rgba(5, 213, 255, 0.42);
+  background: rgba(5, 213, 255, 0.07);
+}
+
+.control-guide-pill.tone-crimson {
+  border-color: rgba(255, 42, 109, 0.42);
+  background: rgba(255, 42, 109, 0.07);
+}
+
+.control-guide-pill.tone-gold {
+  border-color: rgba(255, 230, 0, 0.42);
+  background: rgba(255, 230, 0, 0.07);
+}
+
+.control-guide-pill.tone-neutral {
+  border-color: rgba(52, 211, 153, 0.36);
+  background: rgba(52, 211, 153, 0.06);
+}
+
+.control-pill-top {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.control-lane-tag {
+  flex-shrink: 0;
+  font-size: 8.5px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  padding: 1px 4px;
+  border-radius: 4px;
+  color: #070914;
+  background: #9cb3d9;
+}
+
+.control-guide-pill.tone-cyan .control-lane-tag {
+  background: #05d5ff;
+}
+
+.control-guide-pill.tone-crimson .control-lane-tag {
+  background: #ff2a6d;
+  color: #ffffff;
+}
+
+.control-guide-pill.tone-gold .control-lane-tag {
+  background: #ffe600;
+}
+
+.control-guide-pill.tone-neutral .control-lane-tag {
+  background: #34d399;
+}
+
+.control-pill-top strong {
+  font-size: 9.5px;
+  font-weight: 800;
+  color: #f2f7ff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.control-guide-pill small {
+  font-size: 9.5px;
+  line-height: 1.2;
+  color: #a9bedf;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 820px) {
+  .controls-pill-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 /* ==================== In-Game HUD Overlay ==================== */
@@ -710,35 +798,107 @@ body,
 
 .hud-center-banner {
   position: absolute;
-  /* Just above the bottom HUD + Groove HP bar: clear of top HUD panels and lower runner field. */
-  bottom: 124px;
+  top: 112px;
   left: 50%;
   transform: translateX(-50%);
-  /* Keep messages on one line instead of breaking mid-token. */
+  pointer-events: none;
   white-space: nowrap;
-  max-width: calc(100vw - 48px);
+  max-width: calc(100vw - 420px);
   overflow: hidden;
   text-overflow: ellipsis;
-  background: rgba(8, 12, 26, 0.88);
+  background: rgba(8, 12, 26, 0.92);
   border: 1.5px solid #05d5ff;
-  padding: 8px 20px;
+  padding: 7px 18px;
   border-radius: 999px;
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 800;
   letter-spacing: 0.04em;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 
+.hud-lane-keys {
+  position: absolute;
+  bottom: 104px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.hud-keycap {
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(8, 12, 26, 0.9);
+  border: 1.5px solid rgba(255, 255, 255, 0.18);
+  color: #9cb3d9;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  transition: transform 0.06s ease-out, border-color 0.08s ease-out, box-shadow 0.08s ease-out,
+    background-color 0.08s ease-out, color 0.08s ease-out;
+}
+
+.hud-keycap kbd {
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  opacity: 0.92;
+}
+
+.hud-keycap.keycap-high.is-lit {
+  color: #05d5ff;
+  border-color: #05d5ff;
+  background: rgba(5, 213, 255, 0.18);
+  box-shadow: 0 0 14px rgba(5, 213, 255, 0.45);
+}
+
+.hud-keycap.keycap-high.is-flash {
+  color: #ffffff;
+  background: rgba(5, 213, 255, 0.36);
+  box-shadow: 0 0 22px rgba(5, 213, 255, 0.85);
+  transform: translateY(-2px) scale(1.06);
+}
+
+.hud-keycap.keycap-chord.is-lit {
+  color: #ffe600;
+  border-color: #ffe600;
+  background: rgba(255, 230, 0, 0.28);
+  box-shadow: 0 0 20px rgba(255, 230, 0, 0.78);
+  transform: translateY(-2px) scale(1.07);
+}
+
+.hud-keycap.keycap-low.is-lit {
+  color: #ff6b8b;
+  border-color: #ff2a6d;
+  background: rgba(255, 42, 109, 0.18);
+  box-shadow: 0 0 14px rgba(255, 42, 109, 0.45);
+}
+
+.hud-keycap.keycap-low.is-flash {
+  color: #ffffff;
+  background: rgba(255, 42, 109, 0.36);
+  box-shadow: 0 0 22px rgba(255, 42, 109, 0.85);
+  transform: translateY(-2px) scale(1.06);
+}
+
 .hud-bottom-center {
   position: absolute;
-  bottom: 20px;
+  bottom: 14px;
   left: 50%;
   transform: translateX(-50%);
   width: min(640px, 92vw);
   background: rgba(10, 14, 28, 0.96);
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 14px;
-  padding: 9px 16px;
+  padding: 8px 16px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -927,11 +1087,11 @@ body,
   background: rgba(12, 17, 34, 0.95);
   border: 2px solid #05d5ff;
   border-radius: 18px;
-  padding: 14px 20px;
+  padding: 12px 20px;
   text-align: center;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
 }
 
 .result-modal-card h2 {
@@ -984,6 +1144,11 @@ body,
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.skin-unlock-list.multi-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .skin-unlock-item {
@@ -1075,6 +1240,9 @@ body,
 
 .stat-item small {
   font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   color: #8ba3cc;
   white-space: nowrap;
   overflow: hidden;
@@ -1416,9 +1584,38 @@ body,
   }
 }
 
+.hud-rush-badge {
+  position: absolute;
+  left: 25%;
+  top: 23%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  font-size: 15px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+  color: #070914;
+  background: linear-gradient(90deg, #ffe600, #ff2a6d);
+  border: 1.5px solid #ffffff;
+  padding: 3px 12px;
+  border-radius: 999px;
+  box-shadow: 0 0 22px rgba(255, 230, 0, 0.75);
+}
+
+.judgment-critical-badge {
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: #070914;
+  background: linear-gradient(90deg, #ffe600, #ff9e00);
+  box-shadow: 0 0 14px rgba(255, 230, 0, 0.8);
+}
+
 .hud-judgment-pop {
   position: absolute;
-  left: 24%;
+  left: 25%;
   top: 32%;
   transform: translate(-50%, -50%);
   pointer-events: none;
@@ -1689,8 +1886,8 @@ body,
   animation: overdrivePulse 0.9s ease-in-out infinite;
 }
 
-.hud-overlay:has(.overdrive-ready-btn) .hud-center-banner {
-  bottom: 162px;
+.hud-overlay:has(.overdrive-ready-btn) .hud-lane-keys {
+  bottom: 144px;
 }
 
 .gauge-text-hot {
@@ -1847,22 +2044,24 @@ body,
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  padding: 14px 16px;
+  padding: 10px 16px;
   background: radial-gradient(circle at 50% 58%, rgba(7, 9, 20, 0) 52%, rgba(7, 9, 20, 0.45) 100%);
 }
 
 .pause-panel {
   pointer-events: auto;
   width: 100%;
-  max-width: 660px;
+  max-width: 740px;
+  max-height: 94vh;
+  overflow-y: auto;
   background: rgba(10, 14, 28, 0.95);
   border: 1.5px solid rgba(5, 213, 255, 0.55);
   border-radius: 16px;
-  padding: 12px 16px;
+  padding: 10px 14px;
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.7), 0 0 28px rgba(5, 213, 255, 0.16);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .pause-collapsed-pill {
@@ -1954,11 +2153,99 @@ body,
 }
 
 .pause-action-btn {
-  padding: 9px 14px;
-  font-size: 13.5px;
+  padding: 7px 12px;
+  font-size: 13px;
   font-weight: 900;
   border-radius: 10px;
   transition: transform 0.12s ease, background 0.14s ease, border-color 0.14s ease;
+}
+
+.pause-audio-offset-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 10px;
+  border-radius: 10px;
+  background: rgba(5, 8, 18, 0.72);
+  border: 1px solid rgba(5, 213, 255, 0.28);
+}
+
+.pause-audio-offset-info {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  min-width: 0;
+}
+
+.pause-audio-offset-info strong {
+  font-size: 11.5px;
+  font-weight: 800;
+  color: #05d5ff;
+  white-space: nowrap;
+}
+
+.pause-audio-offset-info small {
+  font-size: 10.5px;
+  color: #9cb3d9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pause-audio-offset-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.pause-offset-step-btn {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pause-offset-step-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.pause-offset-readout {
+  min-width: 58px;
+  text-align: center;
+  padding: 3px 8px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  color: #c5daf6;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.pause-offset-readout.is-adjusted {
+  color: #ffe600;
+  background: rgba(255, 230, 0, 0.14);
+  border-color: rgba(255, 230, 0, 0.45);
+}
+
+.pause-offset-reset-btn {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: #ffe600;
+  border-color: rgba(255, 230, 0, 0.42);
+  background: rgba(255, 230, 0, 0.13);
+}
+
+.pause-offset-reset-btn.is-default {
+  opacity: 0.58;
+  color: #9cb3d9;
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .pause-action-btn:hover {

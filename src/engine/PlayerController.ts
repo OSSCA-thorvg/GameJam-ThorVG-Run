@@ -1,66 +1,65 @@
 import { FORM_CONFIG, type ResonanceFormType } from '../types/game';
 
-export interface FormPhysicsProfile {
+export interface KatanaStyleProfile {
   form: ResonanceFormType;
-  gravity: number;
-  jumpVelocity: number;
-  secondJumpVelocity: number;
-  maxJumps: number;
-  dashDurationSec: number;
-  dashCooldownSec: number;
-  dashSpeedMultiplier: number;
-  shockwaveRangePx: number;
-  slopeGrindMultiplier: number;
-  piercesTrapsDuringDash: boolean;
+  /** Airborne hang duration (s) after a HIGH slash before returning to 1F LOW deck (`0.48s`). */
+  highHangDurationSec: number;
+  /** Multiplier applied to Groove HP miss drain & hazard damage (`bass` = `0.80` for `-20%` mitigation). */
+  grooveDamageScale: number;
+  /** Multiplier on Resonance/Overdrive gauge charge (`synth` = `1.30` for `+30%`). */
+  gaugeChargeMult: number;
+  /** Multiplier on `CHORD` & `HOLD` ribbon score (`synth` = `1.20` for `+20%`). */
+  chordHoldScoreMult: number;
+  /** Multiplier on Critical `PERFECT` (`<= 45%` of `perfectMs`) hits (`treble` = `1.25` for `+25%`). */
+  criticalScoreMult: number;
+  /** Multiplier on slash score when `combo >= 20` (`treble` = `1.15`). */
+  highComboScoreMult: number;
+  /** Visual width/radius scale for Bezier katana slashes & shockwaves (`bass` = `1.28`). */
+  slashWidthScale: number;
+  shockwaveScale: number;
 }
 
-export const FORM_PROFILES: Record<ResonanceFormType, FormPhysicsProfile> = {
+export const FORM_PROFILES: Record<ResonanceFormType, KatanaStyleProfile> = {
   bass: {
     form: 'bass',
-    gravity: 2150,
-    jumpVelocity: -700,
-    secondJumpVelocity: -630,
-    maxJumps: 2,
-    dashDurationSec: 0.2,
-    dashCooldownSec: 0.48,
-    dashSpeedMultiplier: 1.55,
-    shockwaveRangePx: 390,
-    slopeGrindMultiplier: 1.0,
-    piercesTrapsDuringDash: false,
+    highHangDurationSec: 0.48,
+    grooveDamageScale: 0.8,
+    gaugeChargeMult: 1.0,
+    chordHoldScoreMult: 1.0,
+    criticalScoreMult: 1.0,
+    highComboScoreMult: 1.0,
+    slashWidthScale: 1.28,
+    shockwaveScale: 1.28,
   },
   synth: {
     form: 'synth',
-    gravity: 1850,
-    jumpVelocity: -710,
-    secondJumpVelocity: -650,
-    maxJumps: 2,
-    dashDurationSec: 0.26,
-    dashCooldownSec: 0.55,
-    dashSpeedMultiplier: 1.95,
-    shockwaveRangePx: 0,
-    slopeGrindMultiplier: 1.42,
-    piercesTrapsDuringDash: false,
+    highHangDurationSec: 0.48,
+    grooveDamageScale: 1.0,
+    gaugeChargeMult: 1.3,
+    chordHoldScoreMult: 1.2,
+    criticalScoreMult: 1.0,
+    highComboScoreMult: 1.0,
+    slashWidthScale: 1.08,
+    shockwaveScale: 1.08,
   },
   treble: {
     form: 'treble',
-    gravity: 1920,
-    jumpVelocity: -720,
-    secondJumpVelocity: -640,
-    maxJumps: 2,
-    dashDurationSec: 0.3,
-    dashCooldownSec: 0.5,
-    dashSpeedMultiplier: 2.55,
-    shockwaveRangePx: 0,
-    slopeGrindMultiplier: 1.1,
-    piercesTrapsDuringDash: true,
+    highHangDurationSec: 0.48,
+    grooveDamageScale: 1.0,
+    gaugeChargeMult: 1.05,
+    chordHoldScoreMult: 1.0,
+    criticalScoreMult: 1.25,
+    highComboScoreMult: 1.15,
+    slashWidthScale: 1.0,
+    shockwaveScale: 1.0,
   },
 };
 
 /**
- * Manages Crewmate Playstyle physics profiles and signature skills (universal Double Jump across all 3 styles):
- * - Bass Breaker (`bass`, Neon Red): Hexagonal Heavy Slammer + Meteor Air Slam & Ground Shockwave
- * - Synth Magnet (`synth`, Cyan Blue): Streamlined Omni-Magnet Glider + Zero-G Magnetic Glide & Slope/Rail Boost
- * - Treble Blink (`treble`, Electric Yellow): Arrowhead Phase Speedster + Zero-G Invulnerable Blink Dash
+ * Manages Crewmate 2-Lane Katana Slasher Playstyles (`rhythm-slasher-v6`):
+ * - `bass` (`BASS CRUSHER`, Crimson): `-20%` Groove HP drain/damage + wider heavy slash shockwaves
+ * - `synth` (`SYNTH KATANA`, Cyan): `+30%` Overdrive gauge charge + `+20%` `CHORD`/`HOLD` bonus score
+ * - `treble` (`TREBLE IAI`, Gold): `+25%` Critical `PERFECT` (`<= 45%` of `perfectMs`) + high-combo bonus
  */
 export class PlayerController {
   private currentForm: ResonanceFormType = 'synth';
@@ -69,7 +68,7 @@ export class PlayerController {
     return this.currentForm;
   }
 
-  public get profile(): FormPhysicsProfile {
+  public get profile(): KatanaStyleProfile {
     return FORM_PROFILES[this.currentForm];
   }
 
@@ -81,4 +80,3 @@ export class PlayerController {
     this.currentForm = initialForm;
   }
 }
-

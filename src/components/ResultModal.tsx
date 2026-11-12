@@ -79,7 +79,7 @@ export const ResultModal: React.FC<ResultModalProps> = ({
         {newlyUnlocked.length > 0 && (
           <div className="result-skin-unlock-banner" data-testid="result-skin-unlock-banner">
             <strong className="skin-unlock-banner-title">{t.result.skinUnlockedTitle}</strong>
-            <div className="skin-unlock-list">
+            <div className={`skin-unlock-list${newlyUnlocked.length >= 2 ? ' multi-col' : ''}`}>
               {newlyUnlocked.map((skinId) => {
                 const skinCfg = CREWMATE_SKIN_CONFIG[skinId];
                 const skinInfo = t.skins[skinId];

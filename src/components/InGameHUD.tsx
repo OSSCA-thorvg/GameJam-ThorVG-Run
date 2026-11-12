@@ -86,7 +86,7 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
         skill: formText.skillName,
         sec: (hud.skillCooldownSec ?? 0).toFixed(1),
       })
-    : format(t.hud.skillReady, { skill: formText.skillName });
+    : formText.skillDesc;
 
   const zoomDisplayText =
     hud.zoomDisplay < 1 ? hud.zoomDisplay.toFixed(2) : hud.zoomDisplay.toFixed(1);
@@ -100,9 +100,15 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
   const isDanger = hpPct <= 30;
   const hpTierClass = hpPct > 65 ? 'hp-high' : hpPct > 30 ? 'hp-mid' : 'hp-danger';
 
+  const playerLane = hud.playerLane ?? 'low';
+  const highLit = Boolean(hud.highKeyFlash || playerLane === 'high');
+  const chordLit = Boolean(hud.chordKeyFlash);
+  const lowLit = Boolean(hud.lowKeyFlash || playerLane === 'low');
+  const rushCombo = hud.rushCombo ?? 0;
+
   return (
     <div className="hud-overlay">
-      {/* Top-left: renderer badge, difficulty, FPS, speed, accuracy, notes, prism stars, NO MISS */}
+      {/* Top-left: renderer badge, difficulty, FPS, speed, accuracy, slashed targets, stars, NO MISS */}
       <div className="hud-top-left" data-ui-panel="true">
         <div className="hud-badge-row">
           <span className={`renderer-badge ${hud.rendererMode === 'gl' ? 'gpu' : 'cpu'}`}>
@@ -237,12 +243,24 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
         </button>
       </div>
 
-      {/* Real-time Floating Rhythm Timing Judgment Popup with Signed FAST / SLOW / JUST */}
+      {/* Live Rush Lock-On Counter Badge */}
+      {rushCombo > 0 && (
+        <div className="hud-rush-badge" data-testid="hud-rush-badge">
+          {format(t.hud.rushBadge, { count: rushCombo })}
+        </div>
+      )}
+
+      {/* Real-time Floating Rhythm Timing Judgment Popup with CRITICAL! & FAST / SLOW / JUST */}
       {hud.judgment && (
         <div
           key={hud.judgment.id}
           className={`hud-judgment-pop grade-${hud.judgment.grade.toLowerCase()}`}
         >
+          {hud.judgment.isCritical && (
+            <span className="judgment-critical-badge" data-testid="hud-critical-badge">
+              {t.hud.criticalBadge}
+            </span>
+          )}
           <strong>{t.judgments[hud.judgment.grade]}</strong>
           {hud.judgment.grade !== 'MISS' && (
             <div className="judgment-meta-row">
@@ -255,7 +273,7 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
         </div>
       )}
 
-      {/* Center: dive / swap / gimmick / overdrive banner */}
+      {/* Center-sky status banner (clear of Dual Reticles & 2-Lane playfield) */}
       {hud.statusBanner && (
         <div
           className="hud-center-banner"
@@ -263,7 +281,7 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
             borderColor:
               hud.statusBanner.key === 'grooveDanger' || hud.statusBanner.key === 'grooveDepleted'
                 ? '#FF2A6D'
-                : hud.overdriveActive
+                : hud.overdriveActive || hud.statusBanner.key === 'chordCross'
                   ? '#FFE600'
                   : formCfg.colorHex,
           }}
@@ -272,7 +290,32 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
         </div>
       )}
 
-      {/* Bottom-center: Manual Overdrive button, Groove HP / Chill status, active playstyle + [Shift] skill status, and Resonance Overdrive bar */}
+      {/* Bottom Live 2-Lane Keycap Receptor (`pointer-events: none` for 0ms canvas click-through) */}
+      <div className="hud-lane-keys" data-testid="hud-lane-keys" aria-hidden="true">
+        <div
+          data-testid="hud-key-high"
+          className={`hud-keycap keycap-high${highLit ? ' is-lit' : ''}${hud.highKeyFlash ? ' is-flash' : ''}`}
+        >
+          <kbd>[{t.hud.laneHighKey}]</kbd>
+          <span>{t.hud.laneHighLabel}</span>
+        </div>
+        <div
+          data-testid="hud-key-chord"
+          className={`hud-keycap keycap-chord${chordLit ? ' is-lit is-flash' : ''}`}
+        >
+          <kbd>[{t.hud.laneChordKey}]</kbd>
+          <span>{t.hud.laneChordLabel}</span>
+        </div>
+        <div
+          data-testid="hud-key-low"
+          className={`hud-keycap keycap-low${lowLit ? ' is-lit' : ''}${hud.lowKeyFlash ? ' is-flash' : ''}`}
+        >
+          <kbd>[{t.hud.laneLowKey}]</kbd>
+          <span>{t.hud.laneLowLabel}</span>
+        </div>
+      </div>
+
+      {/* Bottom-center: Overdrive trigger, Groove HP / Chill status, Katana style & Resonance bar */}
       <div className="hud-bottom-center" data-ui-panel="true">
         {hud.overdriveReady && (
           <button

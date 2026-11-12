@@ -5,6 +5,7 @@ import { formatMessage, type Messages } from './messages';
 export function resolveBanner(t: Messages, banner: BannerMessage): string {
   const form = banner.params?.form;
   const formText = form ? t.forms[form] : null;
+  const bonusVal = banner.params?.bonus;
   return formatMessage(t.banner[banner.key], {
     form: formText?.name ?? '',
     skill: formText?.skillName ?? '',
@@ -12,6 +13,11 @@ export function resolveBanner(t: Messages, banner: BannerMessage): string {
     count: banner.params?.count ?? 0,
     collected: banner.params?.collected ?? 0,
     total: banner.params?.total ?? 3,
+    hits: banner.params?.hits ?? 0,
+    bonus: bonusVal !== undefined ? bonusVal.toLocaleString() : 0,
+    seconds: banner.params?.seconds ?? 0,
+    mult: banner.params?.mult ?? 1,
+    hp: banner.params?.hp ?? 0,
   });
 }
 
@@ -36,4 +42,3 @@ export function trackTitle(t: Messages, track: TrackMetadata): string {
 export function trackArtist(t: Messages, track: TrackMetadata): string {
   return track.isCustom ? t.tracks.customArtist : t.tracks.defaultArtist;
 }
-

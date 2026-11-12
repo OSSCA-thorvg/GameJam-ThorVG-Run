@@ -3,6 +3,7 @@ import {
   FORM_CONFIG,
   type CrewmateSkinId,
   type ResonanceFormType,
+  type SlashLane,
 } from '../../types/game';
 
 const SYNTH_LOCAL_VERTS: ReadonlyArray<readonly [number, number]> = [
@@ -28,8 +29,176 @@ const FLAWLESS_CHEVRON_VERTS: ReadonlyArray<readonly [number, number]> = [
   [-0.88, -0.84],
 ];
 
+/**
+ * Precomputed `(cos(theta), sin(theta))` for a beveled half-hexagon / half-octagon shard:
+ * `0°` chord start -> `4` outer facet vertices (`30°, 60°, 120°, 150°`) -> `180°` chord end.
+ */
+const HALF_SHARD_ARC: ReadonlyArray<readonly [number, number]> = [
+  [1, 0],
+  [0.8660254, 0.5],
+  [0.5, 0.8660254],
+  [-0.5, 0.8660254],
+  [-0.8660254, 0.5],
+  [-1, 0],
+];
+
 /** Exact 4-segment cubic Bezier circle/ellipse control ratio (4 * (sqrt(2) - 1) / 3). */
 const BEZIER_KAPPA = 0.55228475;
+
+/**
+ * Appends a regular N-sided polygon with explicit winding (`clockwise = true` -> `+1`, `false` -> `-1`).
+ */
+export function appendRegularPolygonPath(
+  shape: TvgShape,
+  cx: number,
+  cy: number,
+  radius: number,
+  sides: number,
+  rotation: number = 0,
+  clockwise: boolean = true
+): void {
+  if (radius <= 0.2 || sides < 3) return;
+  const dir = clockwise ? 1 : -1;
+  const step = (dir * Math.PI * 2) / sides;
+  for (let i = 0; i < sides; i++) {
+    const a = rotation + i * step;
+    const vx = cx + Math.cos(a) * radius;
+    const vy = cy + Math.sin(a) * radius;
+    if (i === 0) shape.moveTo(vx, vy);
+    else shape.lineTo(vx, vy);
+  }
+  shape.close();
+}
+
+/**
+ * Appends a hollow regular polygon ring using opposite NonZero winding (`outer` CW + `inner` CCW)
+ * so hollow hexagonal/octagonal frames render cleanly without requiring `FillRule.EvenOdd`.
+ */
+export function appendHollowPolygonRing(
+  shape: TvgShape,
+  cx: number,
+  cy: number,
+  outerRadius: number,
+  innerRadius: number,
+  sides: number,
+  rotation: number = 0
+): void {
+  if (outerRadius <= 0.3) return;
+  appendRegularPolygonPath(shape, cx, cy, outerRadius, sides, rotation, true);
+  if (innerRadius > 0.2 && innerRadius < outerRadius) {
+    appendRegularPolygonPath(shape, cx, cy, innerRadius, sides, rotation, false);
+  }
+}
+
+/**
+ * Appends a razor-sharp 3rd-order Bezier tapered vector blade (zero thickness at both tips
+ * `P0` and `P1`, arched mid-body along `curveBend`) with consistent NonZero winding so
+ * intersecting `'cross'` / `'slam'` arcs never XOR-cancel at their centers.
+ */
+export function appendTaperedBlade(
+  shape: TvgShape,
+  cx: number,
+  cy: number,
+  angle: number,
+  halfLen: number,
+  halfThick: number,
+  curveBend: number
+): void {
+  if (halfLen < 0.5 || halfThick < 0.2) return;
+
+  const ux = Math.cos(angle);
+  const uy = Math.sin(angle);
+  const nx = -uy;
+  const ny = ux;
+
+  const p0x = cx - ux * halfLen;
+  const p0y = cy - uy * halfLen;
+  const p1x = cx + ux * halfLen;
+  const p1y = cy + uy * halfLen;
+
+  const ctrlU = 0.36 * halfLen;
+  const upperN = halfThick * 1.18 + curveBend;
+  const lowerN = -halfThick * 1.05 + curveBend * 0.58;
+
+  const u1x = cx - ux * ctrlU + nx * upperN;
+  const u1y = cy - uy * ctrlU + ny * upperN;
+  const u2x = cx + ux * ctrlU + nx * upperN;
+  const u2y = cy + uy * ctrlU + ny * upperN;
+
+  const l1x = cx + ux * ctrlU + nx * lowerN;
+  const l1y = cy + uy * ctrlU + ny * lowerN;
+  const l2x = cx - ux * ctrlU + nx * lowerN;
+  const l2y = cy - uy * ctrlU + ny * lowerN;
+
+  shape
+    .moveTo(p0x, p0y)
+    .cubicTo(u1x, u1y, u2x, u2y, p1x, p1y)
+    .cubicTo(l1x, l1y, l2x, l2y, p0x, p0y)
+    .close();
+}
+
+/**
+ * Appends a crisp half-hexagon / half-octagon vector polygon split along `cutAngle` on `side`
+ * (`+1` or `-1`). Multiplying both `(u, v)` and `(-v, u)` by `side` keeps the 2D basis determinant
+ * `det = (u^2 + v^2) * side^2 = +1` strictly positive for BOTH halves so overlapping shards on
+ * `NonZero` (`vfxSliced*`) layers never cancel or punch XOR holes.
+ */
+export function appendHalfPolygonShard(
+  targetShape: TvgShape,
+  cx: number,
+  cy: number,
+  radius: number,
+  cutAngle: number,
+  side: 1 | -1
+): void {
+  if (radius < 0.5) return;
+  const u = Math.cos(cutAngle);
+  const v = Math.sin(cutAngle);
+  const su = u * side;
+  const sv = v * side;
+  const nx = -v * side;
+  const ny = u * side;
+
+  for (let i = 0; i < HALF_SHARD_ARC.length; i++) {
+    const [ct, st] = HALF_SHARD_ARC[i]!;
+    const vx = cx + (su * ct + nx * st) * radius;
+    const vy = cy + (sv * ct + ny * st) * radius;
+    if (i === 0) targetShape.moveTo(vx, vy);
+    else targetShape.lineTo(vx, vy);
+  }
+  targetShape.close();
+}
+
+/**
+ * Appends a razor-sharp glowing white cut-seam quad along the bisection chord on `vfxSlashCore`
+ * so pausing at `20.0x` zoom showcases crisp Katana ZERO molten vector bisection.
+ */
+export function appendCutSeamQuad(
+  coreShape: TvgShape,
+  cx: number,
+  cy: number,
+  radius: number,
+  cutAngle: number,
+  side: 1 | -1,
+  seamThick: number,
+  lenScale: number = 1.05
+): void {
+  if (radius < 0.5 || seamThick < 0.2) return;
+  const u = Math.cos(cutAngle);
+  const v = Math.sin(cutAngle);
+  const su = u * side;
+  const sv = v * side;
+  const nx = -v * side;
+  const ny = u * side;
+  const halfL = radius * lenScale;
+
+  coreShape
+    .moveTo(cx - su * halfL, cy - sv * halfL)
+    .lineTo(cx + su * halfL, cy + sv * halfL)
+    .lineTo(cx + su * halfL + nx * seamThick, cy + sv * halfL + ny * seamThick)
+    .lineTo(cx - su * halfL + nx * seamThick, cy - sv * halfL + ny * seamThick)
+    .close();
+}
 
 export function appendPolygonPath(
   shape: TvgShape,
@@ -191,12 +360,14 @@ export interface CrewmateSkinOrnamentParams {
   combo: number;
   timeSec: number;
   overdriveActive: boolean;
+  playerLane?: SlashLane;
 }
 
 /**
  * Renders 100% mathematical (`0KB` asset) vector wings, thrusters, sovereign mantles,
- * tiaras, cyber halos, imperial crowns, and orbiting solar shards synchronized to the
- * Crewmate's bounding box (`lx in [-0.98, +0.98]`, helmet top `ly = -1.30`) and blink alpha.
+ * tiaras, cyber halos, imperial crowns, orbiting solar shards, and an agile lane-reactive
+ * Katana-ready hip blade synchronized to the Crewmate's bounding box (`lx in [-0.98, +0.98]`,
+ * helmet top `ly = -1.30`) and blink alpha.
  */
 export function drawCrewmateSkinOrnaments(params: CrewmateSkinOrnamentParams): void {
   const {
@@ -214,12 +385,13 @@ export function drawCrewmateSkinOrnaments(params: CrewmateSkinOrnamentParams): v
     combo,
     timeSec,
     overdriveActive,
+    playerLane = 'low',
   } = params;
 
-  playerGlowShape.reset();
-  playerCoreShape.reset();
-  skinFrontShape.reset();
-  skinFrontGlowShape.reset();
+  playerGlowShape.reset().fill(0, 0, 0, 0);
+  playerCoreShape.reset().fill(0, 0, 0, 0);
+  skinFrontShape.reset().fill(0, 0, 0, 0);
+  skinFrontGlowShape.reset().fill(0, 0, 0, 0);
 
   if (radius <= 0.5 || alphaRatio <= 0.01) return;
 
@@ -232,16 +404,6 @@ export function drawCrewmateSkinOrnaments(params: CrewmateSkinOrnamentParams): v
   // Always preserve playstyle shield aura + sacred combo halo on `playerGlowShape`
   appendPolygonPath(playerGlowShape, cx, cy, radius * 1.45, rotation, form);
   appendSacredComboHalo(playerGlowShape, cx, cy, radius, combo, timeSec, overdriveActive);
-
-  if (skinId === 'classic') {
-    playerGlowShape
-      .fill(ar, ag, ab, clampAlpha(overdriveActive ? 95 : 68))
-      .stroke({
-        width: sw(overdriveActive ? 2.8 : 2.0),
-        color: [ar, ag, ab, clampAlpha(215)],
-      });
-    return;
-  }
 
   const cos = Math.cos(rotation);
   const sin = Math.sin(rotation);
@@ -261,6 +423,69 @@ export function drawCrewmateSkinOrnaments(params: CrewmateSkinOrnamentParams): v
     }
     shape.close();
   };
+
+  // Agile forward Katana-ready hip blade: poised upward on 2F HIGH, forward iai stance on 1F LOW
+  const appendKatanaStanceBlade = (): void => {
+    const tipY = playerLane === 'high' ? -0.18 : 0.06;
+    const midY = playerLane === 'high' ? 0.06 : 0.19;
+    // Curved single-edged katana blade + tsuba handguard (`lx <= 1.38` stays well inside 1.68 orbit)
+    skinFrontShape
+      .moveTo(tx(0.14, 0.27), ty(0.14, 0.27))
+      .cubicTo(
+        tx(0.56, midY - 0.07),
+        ty(0.56, midY - 0.07),
+        tx(1.02, tipY - 0.05),
+        ty(1.02, tipY - 0.05),
+        tx(1.38, tipY),
+        ty(1.38, tipY)
+      )
+      .cubicTo(
+        tx(1.04, tipY + 0.07),
+        ty(1.04, tipY + 0.07),
+        tx(0.56, midY + 0.05),
+        ty(0.56, midY + 0.05),
+        tx(0.14, 0.35),
+        ty(0.14, 0.35)
+      )
+      .close();
+    // Tsuba guard + grip pommel
+    appendLocalPoly(skinFrontShape, [
+      [0.10, 0.19],
+      [0.19, 0.19],
+      [0.19, 0.43],
+      [0.10, 0.43],
+    ]);
+    appendLocalPoly(skinFrontShape, [
+      [-0.22, 0.30],
+      [0.10, 0.28],
+      [0.10, 0.35],
+      [-0.22, 0.37],
+    ]);
+
+    // Glowing plasma edge highlight along the katana spine
+    skinFrontGlowShape
+      .moveTo(tx(0.22, 0.29), ty(0.22, 0.29))
+      .lineTo(tx(1.40, tipY), ty(1.40, tipY))
+      .lineTo(tx(0.86, tipY + 0.05), ty(0.86, tipY + 0.05))
+      .close();
+  };
+
+  if (skinId === 'classic') {
+    playerGlowShape
+      .fill(ar, ag, ab, clampAlpha(overdriveActive ? 95 : 68))
+      .stroke({
+        width: sw(overdriveActive ? 2.8 : 2.0),
+        color: [ar, ag, ab, clampAlpha(215)],
+      });
+    appendKatanaStanceBlade();
+    skinFrontShape
+      .fill(226, 246, 255, clampAlpha(240))
+      .stroke({ width: sw(1.65), color: [255, 255, 255, clampAlpha(252)] });
+    skinFrontGlowShape
+      .fill(ar, ag, ab, clampAlpha(205))
+      .stroke({ width: sw(1.25), color: [255, 255, 255, clampAlpha(225)] });
+    return;
+  }
 
   const appendLocalDiamond = (
     shape: TvgShape,
@@ -444,6 +669,7 @@ export function drawCrewmateSkinOrnaments(params: CrewmateSkinOrnamentParams): v
       .close();
     // Counter-wound center socket so `skinFrontGlowShape` renders a blazing gold crystal gem
     appendLocalDiamond(skinFrontShape, -0.02, -1.46, 0.105, 0.145, false);
+    appendKatanaStanceBlade();
     skinFrontShape
       .fill(56, 189, 248, clampAlpha(244))
       .stroke({ width: sw(1.95), color: [236, 252, 255, clampAlpha(255)] });
@@ -536,6 +762,7 @@ export function drawCrewmateSkinOrnaments(params: CrewmateSkinOrnamentParams): v
       [0.42, -0.32],
       [0.02, -0.49],
     ]);
+    appendKatanaStanceBlade();
     skinFrontShape
       .fill(52, 211, 153, clampAlpha(242))
       .stroke({ width: sw(1.85), color: [232, 255, 250, clampAlpha(255)] });
@@ -663,6 +890,7 @@ export function drawCrewmateSkinOrnaments(params: CrewmateSkinOrnamentParams): v
   appendLocalDiamond(skinFrontShape, -0.02, -2.04, 0.065, 0.075, true);
   // Counter-wound Ruby Socket inside the golden crown band so crimson ruby glows purely
   appendLocalDiamond(skinFrontShape, -0.02, -1.43, 0.105, 0.135, false);
+  appendKatanaStanceBlade();
 
   // Crimson Center Ruby Jewel inside the crown socket
   const rubyPulse = 1 + 0.07 * Math.sin(timeSec * 7.2);
@@ -742,8 +970,8 @@ export function drawPlayerPolygon(
   const [r, g, b] = overdriveActive ? [255, 232, 85] : FORM_CONFIG[form].rgb;
   const alpha = Math.floor(255 * alphaRatio);
 
-  playerGlowShape.reset();
-  playerCoreShape.reset();
+  playerGlowShape.reset().fill(0, 0, 0, 0);
+  playerCoreShape.reset().fill(0, 0, 0, 0);
 
   if (auraOnly) {
     appendPolygonPath(playerGlowShape, cx, cy, radius * 1.45, rotation, form);

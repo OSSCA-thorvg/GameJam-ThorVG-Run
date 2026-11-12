@@ -2,9 +2,11 @@ import { AudioEngine } from '../audio/AudioEngine';
 import { analyzeTrackBlueprint, WORLD_PX_PER_SEC } from '../audio/TrackAnalyzer';
 import { ThorVGRenderer } from '../renderer/ThorVGRenderer';
 import {
+  CHORD_SYNC_WINDOW_SEC,
   DIFFICULTY_CONFIG,
   FORM_CONFIG,
   type BannerMessage,
+  type BeatTarget,
   type CrewmateSkinId,
   type DifficultyMode,
   type FrequencyBands,
@@ -13,9 +15,9 @@ import {
   type LoadingProgress,
   type RendererMode,
   type ResonanceFormType,
-  type ResonanceOrb,
   type SectionIntensity,
   type SfxMode,
+  type SlashLane,
   type TrackBlueprint,
   type TrackMetadata,
 } from '../types/game';
@@ -25,19 +27,28 @@ import { evaluateSkinUnlocksOnClear, nextSfxMode, saveTrackRunResult } from './r
 import { ScoreJudgeSystem } from './systems/ScoreJudgeSystem';
 import { VfxPoolSystem } from './systems/VfxPoolSystem';
 
-export const PLAYER_HIT_X_RATIO = 0.24;
+export const RETICLE_X_RATIO = 0.25;
+export const PLAYER_HIT_X_RATIO = RETICLE_X_RATIO;
+
 const OVERDRIVE_DURATION_SEC = 8.0;
 const HUD_PUBLISH_INTERVAL_SEC = 0.05; // 20Hz steady telemetry + 0ms instant flush on discrete dirty events
+const KEY_FLASH_DURATION_SEC = 0.09;
 const LIVE_MIN_ZOOM = 0.4;
 const LIVE_MAX_ZOOM = 4.0;
 const PAUSED_MIN_ZOOM = 0.2;
 const PAUSED_MAX_ZOOM = 20.0;
 
+const CYAN_RGB: readonly [number, number, number] = [5, 213, 255];
+const CRIMSON_RGB: readonly [number, number, number] = [255, 42, 109];
+const GOLD_RGB: readonly [number, number, number] = [255, 230, 0];
+
 /**
- * Core 60fps Hybrid Rhythm-Runner Coordinator:
- * - Zero-offset 1:1 Audio-to-Player synchronization (`playerWorldX = audioSec * baseSpeed`)
- * - Composes `BezierTerrain` (O(log N + K) streaming), `PlayerController`, `ScoreJudgeSystem`, and `VfxPoolSystem`
- * - Publishes HUD telemetry at 20Hz with immediate dirty-flag flushing on judgments, combos, and phase transitions
+ * Core 60fps 2-Lane Instant Rhythm Slasher Coordinator (`rhythm-slasher-v6`):
+ * - 100% Active Agency: zero passive/magnet note collection; every target is sliced at the Dual Reticle
+ * - `[Fix 2]` World scroll (`cameraX`) NEVER freezes during hitstop (`0.0ms` scroll lag)
+ * - `[Fix 3]` Pause-continuous `getEffectiveElapsedSec()` + sub-frame `e.timeStamp` compensation + live sync offset
+ * - `[Fix 4]` Reticle focal lock (`fx = getReticleScreenX()`), `50ms` `CHORD` sync window, `75ms` `HOLD` grace, `RUSH` lock-on
+ * - `[Fix 5]` Zero-cooldown `applyMissGrooveDrain` (`-16 HP` Normal) vs `0.45s` `applyHazardDamage`
  */
 export class GameEngine {
   private readonly audio: AudioEngine;
@@ -70,39 +81,44 @@ export class GameEngine {
   private hudPublishAccum: number = 0;
   private hudDirty: boolean = true;
 
-  // World & Runner Physics State
+  // 2-Lane Slasher World & Character State
   private cameraX: number = 0;
+  private prevRenderCameraX: number = 0;
   private baseSpeed: number = WORLD_PX_PER_SEC;
-  private playerY: number = 360;
-  private playerVy: number = 0;
+  private playerLane: SlashLane = 'low';
+  private highAirHangTimer: number = 0;
+  private chordPoseTimer: number = 0;
+  private playerY: number = 520;
   private playerRotation: number = 0;
   private readonly playerRadius: number = 22;
-  private isGrounded: boolean = false;
-  private jumpsRemaining: number = 2;
-  private dashTimer: number = 0;
-  private strikeTimer: number = 0;
-  private airBoostTimer: number = 0;
-  private dashCooldown: number = 0;
+  private slashRecoilX: number = 0;
+  private slashAltToggle: number = 0;
   private isGrinding: boolean = false;
-  private isDiveHeld: boolean = false;
-  private isJumpHeld: boolean = false;
-  private lastActionAudioSec: number = -10;
-  private holdTickAccum: number = 0;
   private surfMomentum: number = 0.25;
   private beatPulse: number = 0;
+  private reticlePulseHigh: number = 0;
+  private reticlePulseLow: number = 0;
   private lastBeatSliceIndex: number = -1;
   private currentSectionIntensity: SectionIntensity = 'calm';
-  private slamActive: boolean = false;
   private invulnerableTimer: number = 0;
   private runCycleTime: number = 0;
-  private hitXRatio: number = PLAYER_HIT_X_RATIO;
+  private firstUnresolvedIdx: number = 0;
+  private activeRushCombo: number = 0;
+
+  // Live Key Hold & Receptor Flash State
+  private laneHighHeld: boolean = false;
+  private laneLowHeld: boolean = false;
+  private laneChordHeld: boolean = false;
+  private highKeyFlashTimer: number = 0;
+  private lowKeyFlashTimer: number = 0;
+  private chordKeyFlashTimer: number = 0;
 
   // Screen Shake State
   private shakeTimer: number = 0;
   private shakeDuration: number = 0.2;
   private shakeIntensity: number = 0;
 
-  // Crewmate Playstyle, Vector Skin, Groove Survival HP & Resonance Overdrive State
+  // Playstyle, Skin, Groove HP & Resonance Overdrive State
   private playstyle: ResonanceFormType = 'synth';
   private activeForm: ResonanceFormType = 'synth';
   private selectedSkin: CrewmateSkinId = 'classic';
@@ -111,7 +127,7 @@ export class GameEngine {
   private overdriveNotifiedReady: boolean = false;
   private grooveHp: number = 100;
   private readonly maxGrooveHp: number = 100;
-  private grooveDamageCooldown: number = 0;
+  private hazardDamageCooldown: number = 0;
   private isFailed: boolean = false;
   private newlyUnlockedSkins: CrewmateSkinId[] = [];
 
@@ -138,18 +154,14 @@ export class GameEngine {
   private hasManualPan: boolean = false;
   private pausedRenderRaf: number = 0;
 
-  // Dynamic Vector Cinematic Camera & Render-Space Hitstop State
+  // Dynamic Vector Cinematic Camera & Non-Freezing Hitstop State (`[Fix 2]`)
   private cinematicCamera: boolean = true;
   private cinematicZoom: number = 1.0;
   private impactZoomPunch: number = 0;
   private hitstopTimer: number = 0;
   private hitstopCooldownTimer: number = 0;
-  private hitstopFreezeCameraX: number = 0;
-  private hitstopFreezePlayerY: number = 0;
+  private hitstopFreezePlayerY: number = 520;
   private hitstopFreezeRunCycle: number = 0;
-  private visualLagX: number = 0;
-  private visualLagY: number = 0;
-  private prevRenderCameraX: number = 0;
 
   constructor(audio: AudioEngine, onHudUpdate: (hud: HUDTelemetry) => void) {
     this.audio = audio;
@@ -172,9 +184,19 @@ export class GameEngine {
     this.height = height;
     this.hudDirty = true;
     if (this.running && this.paused) {
+      this.cameraX = this.pausedAudioSec * this.baseSpeed - this.getReticleScreenX();
       this.clampPausedPan();
       this.refreshPausedView(true);
     }
+  }
+
+  public setRenderer(
+    renderer: ThorVGRenderer,
+    mode: RendererMode = this.rendererMode,
+    width: number = this.width,
+    height: number = this.height
+  ): void {
+    this.attachRenderer(renderer, mode, width, height);
   }
 
   public setDifficulty(difficulty: DifficultyMode): void {
@@ -233,13 +255,28 @@ export class GameEngine {
     return next;
   }
 
+  public setAudioOffsetMs(offsetMs: number): number {
+    const applied = this.audio.setAudioOffsetMs(offsetMs);
+    this.hudDirty = true;
+    if (this.running && this.paused) {
+      this.pausedAudioSec = this.audio.getEffectiveElapsedSec();
+      this.cameraX = this.pausedAudioSec * this.baseSpeed - this.getReticleScreenX();
+      this.prevRenderCameraX = this.cameraX;
+      this.clampPausedPan();
+      this.refreshPausedView(true);
+    }
+    return applied;
+  }
+
+  public getAudioOffsetMs(): number {
+    return this.audio.getAudioOffsetMs();
+  }
+
   public setCinematicCamera(enabled: boolean): void {
     this.cinematicCamera = enabled;
     this.hudDirty = true;
     if (this.running && this.paused) {
-      this.cinematicZoom = enabled
-        ? this.computeCinematicTargets(this.pausedAudioSec).targetCineZoom
-        : 1.0;
+      this.cinematicZoom = enabled ? this.computeTargetCinematicZoom(this.pausedAudioSec) : 1.0;
       if (!this.hasManualPan) {
         this.applyNeutralPausedFraming(this.userZoom);
       } else {
@@ -273,36 +310,37 @@ export class GameEngine {
     this.overdriveTimer = OVERDRIVE_DURATION_SEC;
     this.overdriveNotifiedReady = false;
     this.invulnerableTimer = Math.max(this.invulnerableTimer, OVERDRIVE_DURATION_SEC + 0.15);
-    this.dashCooldown = 0;
-    this.jumpsRemaining = this.playerController.profile.maxJumps;
     this.surfMomentum = 1.0;
     this.beatPulse = 1.0;
-    this.healGrooveHp(this.difficulty === 'hard' ? 24 : 28);
+    this.reticlePulseHigh = 1.0;
+    this.reticlePulseLow = 1.0;
+    this.healGrooveHp(this.difficulty === 'hard' ? 22 : 26);
     this.hudDirty = true;
 
-    const sx = this.getPlayerScreenX();
-    const sy = this.getRenderPlayerY();
+    const rx = this.getReticleScreenX();
+    const py = this.getRenderPlayerY();
     this.audio.sfx.playOverdriveBurst();
-    this.audio.sfx.playBladeSlash();
-    this.triggerHitstop(0.03, 0.075);
-    this.triggerScreenShake(0.32, 9.5);
-    this.vfx.spawnSlash(sx, sy, -0.42, 230, 18, [255, 230, 0], 'cross', 0.22);
-    this.vfx.spawnShockwave(sx, sy, 24, 340, [255, 230, 0], 1.0);
-    this.vfx.spawnShockwave(sx, sy, 16, 220, FORM_CONFIG[this.activeForm].rgb, 0.95);
-    this.vfx.spawnBurst(sx, sy, [255, 230, 0], 26);
-    this.setBanner({ key: 'overdriveActivate' }, 2.4);
+    this.triggerHitstop(0.036, 0.075);
+    this.triggerScreenShake(0.3, 9.0);
+    this.vfx.spawnSlash(rx, py, -0.45, 240, 20, GOLD_RGB, 'cross', 0.22);
+    this.vfx.spawnSlash(rx, py, 0.45, 240, 20, GOLD_RGB, 'cross', 0.22);
+    this.vfx.spawnShockwave(rx, py, 24, 340, GOLD_RGB, 1.0);
+    this.vfx.spawnShockwave(rx, py, 16, 220, FORM_CONFIG[this.activeForm].rgb, 0.95);
+    this.vfx.spawnBurst(rx, py, GOLD_RGB, 26);
+    this.setBanner({ key: 'overdriveActivate', params: { seconds: OVERDRIVE_DURATION_SEC, mult: 2 } }, 2.2);
     return true;
   }
 
+  /**
+   * [Fix 2] Hitstop freezes character strike pose & `SlicedEnemyHalf` fragments ONLY.
+   * World `cameraX` NEVER freezes so incoming beat targets retain `0.0ms` timing integrity!
+   */
   private triggerHitstop(durationSec: number, zoomPunch: number): void {
     this.impactZoomPunch = Math.min(0.11, Math.max(this.impactZoomPunch, zoomPunch));
     if (this.hitstopCooldownTimer > 0 || this.hitstopTimer > 0) return;
-    const curRenderCamX = this.getRenderCameraX();
-    const curRenderPy = this.getRenderPlayerY();
     this.hitstopTimer = durationSec;
-    this.hitstopCooldownTimer = 0.14;
-    this.hitstopFreezeCameraX = curRenderCamX;
-    this.hitstopFreezePlayerY = curRenderPy;
+    this.hitstopCooldownTimer = 0.12;
+    this.hitstopFreezePlayerY = this.playerY;
     this.hitstopFreezeRunCycle = this.runCycleTime;
   }
 
@@ -319,6 +357,7 @@ export class GameEngine {
     this.height = height;
     this.renderer?.resize(width, height);
     if (this.running && this.paused) {
+      this.cameraX = this.pausedAudioSec * this.baseSpeed - this.getReticleScreenX();
       this.clampPausedPan();
       this.refreshPausedView(true);
     }
@@ -367,7 +406,8 @@ export class GameEngine {
 
     this.resetState();
     this.renderer?.clearForTransition();
-    this.renderCurrentState(0, this.audio.getFrequencyData());
+    const initialAudioSec = this.audio.getEffectiveElapsedSec();
+    this.renderCurrentState(initialAudioSec, this.audio.getFrequencyData());
     this.hudDirty = false;
     this.scoreJudge.consumeDirty();
     this.publishHud(0, 1.0, false);
@@ -394,12 +434,14 @@ export class GameEngine {
     this.panX = 0;
     this.panY = 0;
     this.hasManualPan = false;
-    this.isDiveHeld = false;
-    this.isJumpHeld = false;
+    this.laneHighHeld = false;
+    this.laneLowHeld = false;
+    this.laneChordHeld = false;
+    this.highKeyFlashTimer = 0;
+    this.lowKeyFlashTimer = 0;
+    this.chordKeyFlashTimer = 0;
     this.hitstopTimer = 0;
     this.hitstopCooldownTimer = 0;
-    this.visualLagX = 0;
-    this.visualLagY = 0;
     this.prevRenderCameraX = this.cameraX;
     this.impactZoomPunch = 0;
     cancelAnimationFrame(this.rafId);
@@ -408,68 +450,53 @@ export class GameEngine {
     this.audio.stop();
   }
 
-  private getPlayerScreenX(): number {
-    return this.width * this.hitXRatio;
+  public getReticleScreenX(): number {
+    return this.width * RETICLE_X_RATIO;
   }
 
+  private getPlayerRenderScreenX(): number {
+    return this.getReticleScreenX() - 24 + this.slashRecoilX;
+  }
+
+  /**
+   * [Fix 2] Always returns `this.cameraX` directly — world scroll NEVER freezes on hitstop!
+   */
   private getRenderCameraX(): number {
-    return this.hitstopTimer > 0 ? this.hitstopFreezeCameraX : this.cameraX - this.visualLagX;
+    return this.cameraX;
   }
 
   private getRenderPlayerY(): number {
-    return this.hitstopTimer > 0 ? this.hitstopFreezePlayerY : this.playerY - this.visualLagY;
+    return this.hitstopTimer > 0 ? this.hitstopFreezePlayerY : this.playerY;
   }
 
   private getRenderRunCycleTime(): number {
     return this.hitstopTimer > 0 ? this.hitstopFreezeRunCycle : this.runCycleTime;
   }
 
-  private computeCinematicTargets(audioSec: number): {
-    targetCineZoom: number;
-    targetHitXRatio: number;
-  } {
+  private computeTargetCinematicZoom(audioSec: number): number {
+    if (!this.cinematicCamera) return 1.0;
     const lookaheadWorldX = Math.max(0, audioSec) * this.baseSpeed + this.baseSpeed * 0.65;
     const lookaheadIntensity = this.terrain.getSectionIntensityAt(lookaheadWorldX);
-    if (!this.cinematicCamera) {
-      return {
-        targetCineZoom: 1.0,
-        targetHitXRatio:
-          this.overdriveTimer > 0
-            ? 0.29
-            : this.currentSectionIntensity === 'drop'
-              ? 0.265
-              : PLAYER_HIT_X_RATIO,
-      };
-    }
     if (this.currentSectionIntensity === 'drop' || lookaheadIntensity === 'drop') {
-      return {
-        targetCineZoom: this.overdriveTimer > 0 ? 0.78 : 0.74,
-        targetHitXRatio: this.overdriveTimer > 0 ? 0.285 : 0.265,
-      };
+      return this.overdriveTimer > 0 ? 0.84 : 0.8;
     }
     if (
       this.currentSectionIntensity === 'calm' &&
       lookaheadIntensity === 'calm' &&
       this.overdriveTimer <= 0
     ) {
-      return {
-        targetCineZoom: 1.42,
-        targetHitXRatio: 0.205,
-      };
+      return 1.24;
     }
-    return {
-      targetCineZoom: 1.0,
-      targetHitXRatio: PLAYER_HIT_X_RATIO,
-    };
+    return 1.0;
   }
 
   private getPhaseBaseZoom(): number {
     const punchScale =
       this.overdriveTimer > 0
-        ? 0.052
+        ? 0.05
         : this.currentSectionIntensity === 'drop'
-          ? 0.044
-          : 0.028;
+          ? 0.042
+          : 0.026;
     const beatAdd = this.beatPulse * punchScale;
     return Math.max(
       0.55,
@@ -481,11 +508,15 @@ export class GameEngine {
     return this.getPhaseBaseZoom() * this.userZoom;
   }
 
+  /**
+   * [Fix 4] Locks horizontal focal anchor strictly to `getReticleScreenX()` (NEVER `playerScreenX`)
+   * so `[C]` cinematic zoom & katana lunge recoil produce `0.0px` reticle screen shift!
+   */
   private getLiveFocalPoint(): { fx: number; fy: number } {
-    const wideBlend = Math.max(0, Math.min(1, (1.0 - this.cinematicZoom) / 0.26));
+    const laneMidY = (this.terrain.getLaneHighScreenY() + this.terrain.getLaneLowScreenY()) * 0.5;
     const py = this.getRenderPlayerY();
-    const fy = py + (this.height * 0.54 - py) * (wideBlend * 0.42);
-    return { fx: this.getPlayerScreenX(), fy };
+    const fy = laneMidY * 0.65 + py * 0.35;
+    return { fx: this.getReticleScreenX(), fy };
   }
 
   private getEffectiveFocalPoint(): { fx: number; fy: number } {
@@ -522,11 +553,10 @@ export class GameEngine {
     const { fx: fx0, fy: fy0 } = this.getLiveFocalPoint();
     const blend = zoom <= 1 ? 0 : Math.min(1, (zoom - 1) / 3);
     const renderPy = this.getRenderPlayerY();
-    const playerSubjY = renderPy + this.playerRadius * 0.65;
     const uSubj = fx0;
-    const vSubj = fy0 + (playerSubjY - fy0) * blend;
+    const vSubj = fy0 + (renderPy - fy0) * blend * 0.6;
     const targetSx = fx0 + (cx - fx0) * blend;
-    const targetSy = fy0 + (Math.max(renderPy, this.height * 0.73) - fy0) * blend;
+    const targetSy = fy0 + (cy - fy0) * blend;
     this.panX = uSubj - cx - (targetSx - cx) / z2;
     this.panY = vSubj - cy - (targetSy - cy) / z2;
     this.clampPausedPan();
@@ -549,18 +579,14 @@ export class GameEngine {
     const { fx } = this.getEffectiveFocalPoint();
     const uLeft = this.panX + fx - fx / zEff;
     const uRight = this.panX + fx + (this.width - fx) / zEff;
-    const pad = Math.max(this.baseSpeed * 0.16, 220);
+    const pad = Math.max(this.baseSpeed * 0.2, 240);
 
-    const renderCamX = this.getRenderCameraX();
-    const minCamX = Math.min(this.cameraX, renderCamX);
-    const maxCamX = Math.max(this.cameraX, renderCamX);
-
-    let minX = minCamX + Math.min(uLeft, uRight) - pad;
-    let maxX = maxCamX + Math.max(uLeft, uRight) + pad;
+    let minX = this.cameraX + Math.min(uLeft, uRight) - pad;
+    let maxX = this.cameraX + Math.max(uLeft, uRight) + pad;
 
     if (includePhysicsUnion) {
-      minX = Math.min(minX, minCamX - 160);
-      maxX = Math.max(maxX, maxCamX + this.width + 320);
+      minX = Math.min(minX, this.cameraX - 180);
+      maxX = Math.max(maxX, this.cameraX + this.width + 340);
     }
 
     return { minX, maxX };
@@ -574,13 +600,14 @@ export class GameEngine {
     if (!this.running || this.paused || this.finishRecorded) return;
     this.hitstopTimer = 0;
     this.hitstopCooldownTimer = 0;
-    this.visualLagX = 0;
-    this.visualLagY = 0;
-    this.prevRenderCameraX = this.cameraX;
     this.pauseSeq++;
 
     this.pausedFreq = this.audio.getFrequencyData();
-    this.pausedAudioSec = this.audio.getElapsedSec();
+    this.audio.pause();
+    this.pausedAudioSec = this.audio.getEffectiveElapsedSec();
+    this.cameraX = this.pausedAudioSec * this.baseSpeed - this.getReticleScreenX();
+    this.prevRenderCameraX = this.cameraX;
+
     this.savedLiveZoom = this.userZoom;
     this.hasManualPan = false;
 
@@ -592,12 +619,12 @@ export class GameEngine {
     this.panY = (fy0 - cy) * (1 - 1 / zEff);
 
     this.shakeTimer = 0;
-    this.isJumpHeld = false;
-    this.isDiveHeld = false;
+    this.laneHighHeld = false;
+    this.laneLowHeld = false;
+    this.laneChordHeld = false;
     this.paused = true;
 
     cancelAnimationFrame(this.rafId);
-    this.audio.pause();
     this.clampPausedPan();
     this.refreshPausedView(true);
   }
@@ -614,9 +641,6 @@ export class GameEngine {
     this.paused = false;
     this.hitstopTimer = 0;
     this.hitstopCooldownTimer = 0;
-    this.visualLagX = 0;
-    this.visualLagY = 0;
-    this.prevRenderCameraX = this.cameraX;
     this.panX = 0;
     this.panY = 0;
     this.hasManualPan = false;
@@ -631,7 +655,9 @@ export class GameEngine {
     this.pausedRenderRaf = 0;
     this.lastFrameTime = performance.now();
 
-    const audioSec = this.audio.getElapsedSec();
+    const effectiveAudioSec = this.audio.getEffectiveElapsedSec();
+    this.cameraX = effectiveAudioSec * this.baseSpeed - this.getReticleScreenX();
+    this.prevRenderCameraX = this.cameraX;
     const freq = this.audio.getFrequencyData();
     this.terrain.update(
       this.cameraX,
@@ -641,7 +667,7 @@ export class GameEngine {
       freq,
       this.computeViewWorldBounds(true)
     );
-    this.renderCurrentState(audioSec, freq);
+    this.renderCurrentState(effectiveAudioSec, freq);
     this.hudDirty = false;
     this.publishHud(this.audio.getProgress(), this.lastSpeedMultiplier, false);
 
@@ -790,22 +816,10 @@ export class GameEngine {
     this.finishRecorded = false;
     this.lastIsNewRecord = false;
     this.lastScoreDelta = 0;
-    this.hitXRatio = PLAYER_HIT_X_RATIO;
     this.cinematicZoom = 1.0;
     this.impactZoomPunch = 0;
     this.baseSpeed =
       this.activeBlueprint?.worldPxPerSec ?? DIFFICULTY_CONFIG[this.difficulty].worldPxPerSec;
-
-    const playerScreenX = this.getPlayerScreenX();
-    // At audioSec = 0, playerWorldX = cameraX + playerScreenX === 0!
-    this.cameraX = -playerScreenX;
-    this.hitstopTimer = 0;
-    this.hitstopCooldownTimer = 0;
-    this.hitstopFreezeCameraX = this.cameraX;
-    this.hitstopFreezeRunCycle = 0;
-    this.visualLagX = 0;
-    this.visualLagY = 0;
-    this.prevRenderCameraX = this.cameraX;
 
     if (this.activeBlueprint) {
       this.terrain.loadBlueprint(this.activeBlueprint, this.width, this.height);
@@ -816,59 +830,598 @@ export class GameEngine {
     this.playerController.reset(this.playstyle);
     this.activeForm = this.playstyle;
 
-    const { floorY } = this.terrain.sampleFloor(0);
-    this.playerY = floorY - this.playerRadius;
+    const initialEffectiveSec = this.audio.getEffectiveElapsedSec();
+    this.cameraX = initialEffectiveSec * this.baseSpeed - this.getReticleScreenX();
+    this.prevRenderCameraX = this.cameraX;
+    this.hitstopTimer = 0;
+    this.hitstopCooldownTimer = 0;
+
+    this.playerLane = 'low';
+    this.highAirHangTimer = 0;
+    this.chordPoseTimer = 0;
+    this.playerY = this.terrain.getLaneLowScreenY();
     this.hitstopFreezePlayerY = this.playerY;
-    this.playerVy = 0;
+    this.hitstopFreezeRunCycle = 0;
     this.playerRotation = 0;
-    this.isGrounded = true;
-    this.jumpsRemaining = this.playerController.profile.maxJumps;
-    this.dashTimer = 0;
-    this.strikeTimer = 0;
-    this.airBoostTimer = 0;
-    this.dashCooldown = 0;
+    this.slashRecoilX = 0;
+    this.slashAltToggle = 0;
     this.isGrinding = false;
-    this.isDiveHeld = false;
-    this.isJumpHeld = false;
-    this.lastActionAudioSec = -10;
-    this.holdTickAccum = 0;
+    this.laneHighHeld = false;
+    this.laneLowHeld = false;
+    this.laneChordHeld = false;
+    this.highKeyFlashTimer = 0;
+    this.lowKeyFlashTimer = 0;
+    this.chordKeyFlashTimer = 0;
     this.surfMomentum = 0.25;
     this.beatPulse = 0;
+    this.reticlePulseHigh = 0;
+    this.reticlePulseLow = 0;
     this.lastBeatSliceIndex = -1;
     this.currentSectionIntensity = 'calm';
-    this.slamActive = false;
     this.invulnerableTimer = 0;
     this.runCycleTime = 0;
+    this.firstUnresolvedIdx = 0;
+    this.activeRushCombo = 0;
     this.shakeTimer = 0;
     this.shakeIntensity = 0;
 
-    this.resonanceGauge = 40;
+    this.resonanceGauge = 35;
     this.overdriveTimer = 0;
     this.overdriveNotifiedReady = false;
     this.grooveHp = this.maxGrooveHp;
-    this.grooveDamageCooldown = 0;
+    this.hazardDamageCooldown = 0;
     this.isFailed = false;
     this.newlyUnlockedSkins = [];
 
     this.scoreJudge.reset();
     this.vfx.reset();
-    this.setBanner({ key: 'ready' }, 2.4);
+    this.setBanner({ key: 'ready' }, 2.2);
   }
 
-  public setJumpHeld(held: boolean): void {
+  public setLaneHeld(lane: SlashLane | 'chord', held: boolean): void {
     if (!this.running || this.paused) {
-      this.isJumpHeld = false;
+      this.laneHighHeld = false;
+      this.laneLowHeld = false;
+      this.laneChordHeld = false;
       return;
     }
-    this.isJumpHeld = held;
+    if (lane === 'high') {
+      if (this.laneHighHeld !== held) {
+        this.laneHighHeld = held;
+        this.hudDirty = true;
+      }
+    } else if (lane === 'low') {
+      if (this.laneLowHeld !== held) {
+        this.laneLowHeld = held;
+        this.hudDirty = true;
+      }
+    } else {
+      if (this.laneChordHeld !== held) {
+        this.laneChordHeld = held;
+        this.hudDirty = true;
+      }
+    }
   }
 
-  public setDiveHeld(held: boolean): void {
-    if (!this.running || this.paused) {
-      this.isDiveHeld = false;
+  /**
+   * [Fix 3] Sub-frame DOM input lag guard (`0ms..45ms`), immune to synthetic/Playwright `timeStamp === 0`.
+   */
+  private computeHitAudioSec(eventTimeStampMs?: number): number {
+    const inputLagSec =
+      eventTimeStampMs !== undefined &&
+      Number.isFinite(eventTimeStampMs) &&
+      eventTimeStampMs > 0
+        ? Math.min(0.045, Math.max(0, (performance.now() - eventTimeStampMs) / 1000))
+        : 0;
+    return this.audio.getEffectiveElapsedSec() - inputLagSec;
+  }
+
+  private snapPlayerToLane(lane: SlashLane): void {
+    const prevY = this.playerY;
+    const nextY =
+      lane === 'high' ? this.terrain.getLaneHighScreenY() : this.terrain.getLaneLowScreenY();
+    if (this.playerLane !== lane) {
+      this.vfx.spawnAfterimage(
+        this.getPlayerRenderScreenX(),
+        (prevY + nextY) * 0.5,
+        lane === 'high' ? -0.22 : 0.2,
+        this.activeForm,
+        0.72
+      );
+    }
+    this.playerLane = lane;
+    this.chordPoseTimer = 0;
+    this.playerY = nextY;
+    this.playerRotation = lane === 'high' ? -0.16 : 0.12;
+    this.slashRecoilX = 24;
+    if (lane === 'high') {
+      this.highAirHangTimer = this.playerController.profile.highHangDurationSec;
+      this.reticlePulseHigh = 1.0;
+    } else {
+      this.highAirHangTimer = 0;
+      this.reticlePulseLow = 1.0;
+    }
+    this.hudDirty = true;
+  }
+
+  public handleSlashHigh(eventTimeStampMs?: number): void {
+    if (!this.running || this.paused || this.finishRecorded) return;
+    this.highKeyFlashTimer = KEY_FLASH_DURATION_SEC;
+    this.snapPlayerToLane('high');
+    const hitAudioSec = this.computeHitAudioSec(eventTimeStampMs);
+    this.processLaneSlashInput('high', hitAudioSec);
+  }
+
+  public handleSlashLow(eventTimeStampMs?: number): void {
+    if (!this.running || this.paused || this.finishRecorded) return;
+    this.lowKeyFlashTimer = KEY_FLASH_DURATION_SEC;
+    this.snapPlayerToLane('low');
+    const hitAudioSec = this.computeHitAudioSec(eventTimeStampMs);
+    this.processLaneSlashInput('low', hitAudioSec);
+  }
+
+  public handleSlashChord(eventTimeStampMs?: number): void {
+    if (!this.running || this.paused || this.finishRecorded) return;
+    this.chordKeyFlashTimer = KEY_FLASH_DURATION_SEC;
+    this.reticlePulseHigh = 1.0;
+    this.reticlePulseLow = 1.0;
+    this.slashRecoilX = 30;
+    this.chordPoseTimer = 0.16;
+    this.playerY =
+      (this.terrain.getLaneHighScreenY() + this.terrain.getLaneLowScreenY()) * 0.5;
+    this.playerRotation = -0.06;
+    this.hudDirty = true;
+
+    const hitAudioSec = this.computeHitAudioSec(eventTimeStampMs);
+    this.processChordSlashInput(hitAudioSec);
+  }
+
+  private findActiveRushTarget(hitAudioSec: number, goodSec: number): BeatTarget | null {
+    const all = this.terrain.getAllTargets();
+    for (let i = this.firstUnresolvedIdx; i < all.length; i++) {
+      const t = all[i]!;
+      if (t.resolved) continue;
+      if (t.timeSec - goodSec > hitAudioSec) break;
+      if (t.kind === 'rush') {
+        const endSec = t.endTimeSec ?? t.timeSec + 1.2;
+        if (hitAudioSec >= t.timeSec - goodSec && hitAudioSec <= endSec + 0.04) {
+          return t;
+        }
+      }
+    }
+    return null;
+  }
+
+  private applyRushMashHit(target: BeatTarget): void {
+    const nextHits = (target.rushHits ?? 0) + 1;
+    target.rushHits = nextHits;
+    const reqHits = target.rushTargetHits ?? 8;
+    this.activeRushCombo = nextHits;
+    this.hudDirty = true;
+
+    const rx = this.getReticleScreenX();
+    const midY = (this.terrain.getLaneHighScreenY() + this.terrain.getLaneLowScreenY()) * 0.5;
+    const angle = (nextHits % 2 === 0 ? 1 : -1) * (0.36 + (nextHits % 3) * 0.12);
+    const widthScale = this.playerController.profile.slashWidthScale;
+
+    this.audio.sfx.playRushHit(nextHits);
+    this.scoreJudge.addRushMashTick(this.getActiveScoreMultiplier());
+    this.addResonanceGauge(2.2 * this.playerController.profile.gaugeChargeMult);
+    this.vfx.spawnSlash(rx, midY, angle, 215, 16 * widthScale, GOLD_RGB, 'cross', 0.16);
+    this.vfx.spawnBurst(rx, midY, nextHits % 2 === 0 ? CYAN_RGB : CRIMSON_RGB, 8);
+
+    if (nextHits === 1) {
+      this.setBanner({ key: 'beatRushStart', params: { total: reqHits } }, 1.2);
+    }
+
+    if (nextHits >= reqHits) {
+      target.resolved = true;
+      target.hitGrade = 'PERFECT';
+      this.activeRushCombo = 0;
+      this.scoreJudge.recordOrbCollected();
+      this.scoreJudge.recordGimmickTriggered();
+      this.scoreJudge.recordTrapDestroyed();
+      this.collectPrismStarIfPresent(target, rx, midY);
+
+      const bonusPts = this.emitSlashJudgment(
+        'PERFECT',
+        rx,
+        midY,
+        0,
+        600,
+        0,
+        true,
+        'chord'
+      );
+      this.audio.sfx.playHazardShatter();
+      this.audio.triggerSidechainDuck(0.75, 0.065);
+      this.triggerHitstop(0.042, 0.09);
+      this.triggerScreenShake(0.28, 9.0);
+      this.vfx.spawnSlicedEnemy(rx, midY - 12, target.radius, -0.52, GOLD_RGB, false, 0.64);
+      this.vfx.spawnSlicedEnemy(rx, midY + 12, target.radius * 0.9, 0.52, CRIMSON_RGB, false, 0.64);
+      this.vfx.spawnShockwave(
+        rx,
+        midY,
+        24,
+        290 * this.playerController.profile.shockwaveScale,
+        GOLD_RGB,
+        1.0
+      );
+      this.vfx.spawnBurst(rx, midY, GOLD_RGB, 26);
+      this.setBanner(
+        { key: 'beatRushFinish', params: { hits: nextHits, bonus: bonusPts } },
+        1.65
+      );
+    }
+  }
+
+  private processChordSlashInput(hitAudioSec: number): void {
+    const cfg = DIFFICULTY_CONFIG[this.difficulty];
+    const goodSec = cfg.goodMs / 1000;
+
+    // 1. Check active Beat Rush boss core first
+    const rushTarget = this.findActiveRushTarget(hitAudioSec, goodSec);
+    if (rushTarget) {
+      this.applyRushMashHit(rushTarget);
       return;
     }
-    this.isDiveHeld = held;
+
+    const all = this.terrain.getAllTargets();
+    let bestChord: BeatTarget | null = null;
+    let bestFallback: BeatTarget | null = null;
+
+    for (let i = this.firstUnresolvedIdx; i < all.length; i++) {
+      const t = all[i]!;
+      if (t.resolved) continue;
+      if (t.timeSec - hitAudioSec > goodSec) break;
+      if (Math.abs(hitAudioSec - t.timeSec) > goodSec) continue;
+
+      if (t.kind === 'chord') {
+        bestChord = t;
+        break;
+      }
+      if (
+        !bestFallback &&
+        (t.kind === 'high' || t.kind === 'low' || (t.kind === 'hold' && !t.holdActive))
+      ) {
+        bestFallback = t;
+      }
+    }
+
+    if (bestChord) {
+      this.resolveFullChordFinisher(bestChord, hitAudioSec);
+      return;
+    }
+
+    if (bestFallback) {
+      this.snapPlayerToLane(bestFallback.lane);
+      if (bestFallback.kind === 'hold') {
+        this.activateHoldHead(bestFallback, hitAudioSec);
+      } else {
+        this.resolveSingleTargetHit(bestFallback, bestFallback.lane, hitAudioSec);
+      }
+      return;
+    }
+
+    // Air X-cross swing
+    const rx = this.getReticleScreenX();
+    const midY = (this.terrain.getLaneHighScreenY() + this.terrain.getLaneLowScreenY()) * 0.5;
+    const wScale = this.playerController.profile.slashWidthScale;
+    this.audio.sfx.playAirSwing('chord');
+    this.vfx.spawnSlash(rx, midY, -0.46, 175, 13 * wScale, GOLD_RGB, 'cross', 0.14);
+    this.vfx.spawnSlash(rx, midY, 0.46, 175, 13 * wScale, GOLD_RGB, 'cross', 0.14);
+  }
+
+  private processLaneSlashInput(lane: SlashLane, hitAudioSec: number): void {
+    const cfg = DIFFICULTY_CONFIG[this.difficulty];
+    const goodSec = cfg.goodMs / 1000;
+
+    // 1. Check active Beat Rush boss core first
+    const rushTarget = this.findActiveRushTarget(hitAudioSec, goodSec);
+    if (rushTarget) {
+      this.applyRushMashHit(rushTarget);
+      return;
+    }
+
+    const all = this.terrain.getAllTargets();
+    let matchedTarget: BeatTarget | null = null;
+
+    for (let i = this.firstUnresolvedIdx; i < all.length; i++) {
+      const t = all[i]!;
+      if (t.resolved) continue;
+      if (t.timeSec - hitAudioSec > goodSec) break;
+
+      // [Fix 4] Check half-struck CHORD awaiting opposite-hand completion within 50ms
+      if (
+        t.kind === 'chord' &&
+        t.chordPartialLane !== undefined &&
+        t.chordPartialLane !== lane &&
+        t.chordPartialSec !== undefined &&
+        Math.abs(hitAudioSec - t.chordPartialSec) <= CHORD_SYNC_WINDOW_SEC
+      ) {
+        this.resolveFullChordFinisher(t, hitAudioSec);
+        return;
+      }
+
+      if (Math.abs(hitAudioSec - t.timeSec) > goodSec) continue;
+
+      if (t.kind === lane) {
+        matchedTarget = t;
+        break;
+      }
+      if (t.kind === 'hold' && t.lane === lane && !t.holdActive) {
+        matchedTarget = t;
+        break;
+      }
+      if (t.kind === 'chord' && t.chordPartialLane === undefined) {
+        matchedTarget = t;
+        break;
+      }
+    }
+
+    if (matchedTarget) {
+      if (matchedTarget.kind === 'chord') {
+        // [Fix 4] Record first-hand partial hit on CHORD and wait up to 50ms (`CHORD_SYNC_WINDOW_SEC`)
+        matchedTarget.chordPartialLane = lane;
+        matchedTarget.chordPartialSec = hitAudioSec;
+        matchedTarget.chordPartialSignedMs = Math.round(
+          (hitAudioSec - matchedTarget.timeSec) * 1000
+        );
+        const rx = this.getReticleScreenX();
+        const ly =
+          lane === 'high'
+            ? this.terrain.getLaneHighScreenY()
+            : this.terrain.getLaneLowScreenY();
+        this.audio.sfx.playAirSwing(lane);
+        this.vfx.spawnSlash(
+          rx,
+          ly,
+          lane === 'high' ? -0.42 : 0.38,
+          170,
+          13 * this.playerController.profile.slashWidthScale,
+          lane === 'high' ? CYAN_RGB : CRIMSON_RGB,
+          'cross',
+          0.14
+        );
+        return;
+      }
+
+      if (matchedTarget.kind === 'hold') {
+        this.activateHoldHead(matchedTarget, hitAudioSec);
+        return;
+      }
+
+      this.resolveSingleTargetHit(matchedTarget, lane, hitAudioSec);
+      return;
+    }
+
+    // Air katana swing (tactile feedback, zero penalty so player can freely dodge hazards!)
+    const rx = this.getReticleScreenX();
+    const laneY =
+      lane === 'high' ? this.terrain.getLaneHighScreenY() : this.terrain.getLaneLowScreenY();
+    this.slashAltToggle ^= 1;
+    const angle =
+      lane === 'high'
+        ? this.slashAltToggle === 0
+          ? -0.44
+          : 0.28
+        : this.slashAltToggle === 0
+          ? 0.42
+          : -0.26;
+    const color = lane === 'high' ? CYAN_RGB : CRIMSON_RGB;
+    this.audio.sfx.playAirSwing(lane);
+    this.vfx.spawnSlash(
+      rx,
+      laneY,
+      angle,
+      165,
+      12 * this.playerController.profile.slashWidthScale,
+      color,
+      lane === 'low' ? 'slam' : 'cross',
+      0.13
+    );
+  }
+
+  private resolveSingleTargetHit(
+    target: BeatTarget,
+    lane: SlashLane,
+    hitAudioSec: number
+  ): void {
+    target.resolved = true;
+    const signedDeltaMs = Math.round((hitAudioSec - target.timeSec) * 1000);
+    const deltaMs = Math.abs(signedDeltaMs);
+    const grade = this.scoreJudge.classifyDeltaMs(deltaMs, this.difficulty);
+    const isCritical =
+      grade === 'PERFECT' && this.scoreJudge.isCriticalDeltaMs(deltaMs, this.difficulty);
+    target.hitGrade = grade;
+
+    this.scoreJudge.recordOrbCollected();
+    const rx = this.getReticleScreenX();
+    const laneY =
+      lane === 'high' ? this.terrain.getLaneHighScreenY() : this.terrain.getLaneLowScreenY();
+    const targetColor = target.isPrismStar
+      ? GOLD_RGB
+      : lane === 'high'
+        ? CYAN_RGB
+        : CRIMSON_RGB;
+
+    this.collectPrismStarIfPresent(target, rx, laneY);
+    this.audio.sfx.playSlashHit(lane, grade, isCritical);
+
+    const profile = this.playerController.profile;
+    let basePts = 320;
+    if (isCritical) basePts = Math.round(basePts * profile.criticalScoreMult);
+    if (this.scoreJudge.combo >= 20) {
+      basePts = Math.round(basePts * profile.highComboScoreMult);
+    }
+
+    this.emitSlashJudgment(
+      grade,
+      rx,
+      laneY,
+      deltaMs,
+      basePts,
+      signedDeltaMs,
+      isCritical,
+      lane
+    );
+
+    this.slashAltToggle ^= 1;
+    const cutAngle =
+      lane === 'high'
+        ? this.slashAltToggle === 0
+          ? -0.48
+          : 0.34
+        : this.slashAltToggle === 0
+          ? 0.46
+          : -0.32;
+
+    this.vfx.spawnSlash(
+      rx,
+      laneY,
+      cutAngle,
+      205,
+      (isCritical ? 18 : 15) * profile.slashWidthScale,
+      isCritical ? GOLD_RGB : targetColor,
+      lane === 'low' ? 'slam' : 'cross',
+      0.18
+    );
+    this.vfx.spawnSlicedEnemy(
+      rx,
+      laneY,
+      target.radius,
+      cutAngle,
+      targetColor,
+      Boolean(target.isPrismStar)
+    );
+
+    if (isCritical) {
+      this.triggerHitstop(0.024, 0.042);
+      this.triggerScreenShake(0.11, 4.2);
+    }
+  }
+
+  private activateHoldHead(target: BeatTarget, hitAudioSec: number): void {
+    const signedDeltaMs = Math.round((hitAudioSec - target.timeSec) * 1000);
+    const deltaMs = Math.abs(signedDeltaMs);
+    const grade = this.scoreJudge.classifyDeltaMs(deltaMs, this.difficulty);
+    const isCritical =
+      grade === 'PERFECT' && this.scoreJudge.isCriticalDeltaMs(deltaMs, this.difficulty);
+
+    target.holdActive = true;
+    target.hitGrade = grade;
+    target.holdReleaseGraceSec = 0.075;
+    target.holdNextTickSec = hitAudioSec + 0.1;
+    this.isGrinding = true;
+
+    this.scoreJudge.recordOrbCollected();
+    const rx = this.getReticleScreenX();
+    const laneY =
+      target.lane === 'high'
+        ? this.terrain.getLaneHighScreenY()
+        : this.terrain.getLaneLowScreenY();
+    const color = target.lane === 'high' ? CYAN_RGB : CRIMSON_RGB;
+
+    this.collectPrismStarIfPresent(target, rx, laneY);
+    this.audio.sfx.playSlashHit(target.lane, grade, isCritical);
+
+    const basePts = Math.round(300 * this.playerController.profile.chordHoldScoreMult);
+    this.emitSlashJudgment(
+      grade,
+      rx,
+      laneY,
+      deltaMs,
+      basePts,
+      signedDeltaMs,
+      isCritical,
+      target.lane
+    );
+    this.vfx.spawnSlash(
+      rx,
+      laneY,
+      0,
+      195,
+      15 * this.playerController.profile.slashWidthScale,
+      color,
+      'pierce',
+      0.17
+    );
+  }
+
+  private resolveFullChordFinisher(target: BeatTarget, hitAudioSec: number): void {
+    target.resolved = true;
+    const rawSignedMs = Math.round((hitAudioSec - target.timeSec) * 1000);
+    const signedDeltaMs =
+      target.chordPartialSignedMs !== undefined &&
+      Math.abs(target.chordPartialSignedMs) < Math.abs(rawSignedMs)
+        ? target.chordPartialSignedMs
+        : rawSignedMs;
+    const deltaMs = Math.abs(signedDeltaMs);
+    const grade = this.scoreJudge.classifyDeltaMs(deltaMs, this.difficulty);
+    const isCritical =
+      grade === 'PERFECT' && this.scoreJudge.isCriticalDeltaMs(deltaMs, this.difficulty);
+    target.hitGrade = grade;
+
+    this.reticlePulseHigh = 1.0;
+    this.reticlePulseLow = 1.0;
+    this.chordPoseTimer = 0.18;
+    const rx = this.getReticleScreenX();
+    const highY = this.terrain.getLaneHighScreenY();
+    const lowY = this.terrain.getLaneLowScreenY();
+    const midY = (highY + lowY) * 0.5;
+    this.playerY = midY;
+
+    this.scoreJudge.recordOrbCollected();
+    this.scoreJudge.recordGimmickTriggered();
+    this.collectPrismStarIfPresent(target, rx, midY);
+
+    const profile = this.playerController.profile;
+    let basePts = Math.round(520 * profile.chordHoldScoreMult);
+    if (isCritical) basePts = Math.round(basePts * profile.criticalScoreMult);
+
+    const bonusPts = this.emitSlashJudgment(
+      grade,
+      rx,
+      midY,
+      deltaMs,
+      basePts,
+      signedDeltaMs,
+      isCritical,
+      'chord'
+    );
+
+    this.audio.sfx.playSlashHit('chord', grade, true);
+    this.audio.triggerSidechainDuck(0.78, 0.055);
+    this.triggerHitstop(0.038, 0.075);
+    this.triggerScreenShake(0.22, 7.5);
+
+    this.vfx.spawnSlash(rx, midY, -0.5, 250, 19 * profile.slashWidthScale, GOLD_RGB, 'cross', 0.21);
+    this.vfx.spawnSlash(rx, midY, 0.5, 250, 19 * profile.slashWidthScale, GOLD_RGB, 'cross', 0.21);
+    this.vfx.spawnSlicedEnemy(rx, highY, target.radius * 0.88, -0.5, GOLD_RGB, Boolean(target.isPrismStar));
+    this.vfx.spawnSlicedEnemy(rx, lowY, target.radius * 0.88, 0.5, GOLD_RGB, Boolean(target.isPrismStar));
+    this.vfx.spawnShockwave(rx, midY, 22, 260 * profile.shockwaveScale, GOLD_RGB, 1.0);
+    this.vfx.spawnBurst(rx, midY, GOLD_RGB, 20);
+    this.setBanner({ key: 'chordCross', params: { bonus: bonusPts } }, 1.25);
+  }
+
+  private collectPrismStarIfPresent(target: BeatTarget, screenX: number, screenY: number): void {
+    if (!target.isPrismStar) return;
+    this.scoreJudge.recordStarCollected();
+    this.addResonanceGauge(18 * this.playerController.profile.gaugeChargeMult);
+    this.healGrooveHp(this.difficulty === 'hard' ? 14 : 18);
+    this.audio.sfx.playPrismStar();
+    this.vfx.spawnShockwave(screenX, screenY, 18, 175, GOLD_RGB, 1.0);
+    this.vfx.spawnBurst(screenX, screenY, GOLD_RGB, 20);
+    this.setBanner(
+      {
+        key: 'prismStar',
+        params: {
+          collected: this.scoreJudge.starsCollected,
+          total: this.terrain.getTotalStarCount() || 3,
+        },
+      },
+      1.5
+    );
   }
 
   private addResonanceGauge(amount: number): void {
@@ -878,26 +1431,52 @@ export class GameEngine {
     if (prev < 100 && this.resonanceGauge >= 100 && !this.overdriveNotifiedReady) {
       this.overdriveNotifiedReady = true;
       this.hudDirty = true;
-      this.setBanner({ key: 'overdriveReady' }, 1.9);
+      this.setBanner({ key: 'overdriveReady' }, 1.8);
     }
   }
 
-  private applyGrooveDamage(baseNormalDmg: number, baseHardDmg: number): void {
+  /**
+   * [Fix 5] Zero-cooldown Groove HP drain per missed slash target:
+   * - `Easy`: `0` drain (`CHILL NO-FAIL`)
+   * - `Normal`: `-16 HP` (`-22 HP` on `CHORD`/`RUSH`), `bass` `-20%` -> `-12.8 HP` (`9 * 12.8 = 115.2 >= 100`)
+   * - `Hard`: `-20 HP` (`-28 HP` on `CHORD`/`RUSH`)
+   */
+  private applyMissGrooveDrain(isHeavy: boolean): void {
+    if (this.difficulty === 'easy' || this.isFailed) return;
+    const baseDrain =
+      this.difficulty === 'hard' ? (isHeavy ? 28 : 20) : isHeavy ? 22 : 16;
+    const overdriveMitigation = this.overdriveTimer > 0 ? 0.5 : 1.0;
+    const drain =
+      baseDrain * this.playerController.profile.grooveDamageScale * overdriveMitigation;
+    const prevHp = this.grooveHp;
+    this.grooveHp = Math.max(0, this.grooveHp - drain);
+    this.hudDirty = true;
+    if (this.grooveHp > 0 && this.grooveHp <= 30 && prevHp > 30) {
+      this.setBanner({ key: 'grooveDanger', params: { hp: Math.round(this.grooveHp) } }, 1.6);
+    }
+  }
+
+  /**
+   * [Fix 5] Physical obstacle (`sawblade` / `mine`) collision damage with `0.45s` invulnerability cooldown.
+   */
+  private applyHazardDamage(): void {
     if (
       this.difficulty === 'easy' ||
       this.isFailed ||
       this.overdriveTimer > 0 ||
-      this.grooveDamageCooldown > 0
+      this.hazardDamageCooldown > 0
     ) {
       return;
     }
-    const dmg = this.difficulty === 'hard' ? baseHardDmg : baseNormalDmg;
+    const baseDmg = this.difficulty === 'hard' ? 28 : 22;
+    const dmg = baseDmg * this.playerController.profile.grooveDamageScale;
     const prevHp = this.grooveHp;
     this.grooveHp = Math.max(0, this.grooveHp - dmg);
-    this.grooveDamageCooldown = 1.05;
+    this.hazardDamageCooldown = 0.45;
+    this.invulnerableTimer = Math.max(this.invulnerableTimer, 0.45);
     this.hudDirty = true;
     if (this.grooveHp > 0 && this.grooveHp <= 30 && prevHp > 30) {
-      this.setBanner({ key: 'grooveDanger' }, 1.8);
+      this.setBanner({ key: 'grooveDanger', params: { hp: Math.round(this.grooveHp) } }, 1.6);
     }
   }
 
@@ -912,8 +1491,24 @@ export class GameEngine {
     }
   }
 
+  private handleMissedTarget(target: BeatTarget, isHeavy: boolean): void {
+    const rx = this.getReticleScreenX();
+    const targetY =
+      target.kind === 'chord' || target.kind === 'rush'
+        ? (this.terrain.getLaneHighScreenY() + this.terrain.getLaneLowScreenY()) * 0.5
+        : target.lane === 'high'
+          ? this.terrain.getLaneHighScreenY()
+          : this.terrain.getLaneLowScreenY();
+
+    this.scoreJudge.recordJudgment('MISS', undefined, 0, 1, undefined, {
+      lane: target.kind === 'chord' || target.kind === 'rush' ? 'chord' : target.lane,
+    });
+    this.surfMomentum = Math.max(0.15, this.surfMomentum * 0.55);
+    this.applyMissGrooveDrain(isHeavy);
+    this.vfx.spawnBurst(rx - 18, targetY, CRIMSON_RGB, 8);
+  }
+
   private triggerStageFail(
-    playerScreenX: number,
     audioSec: number,
     freq: FrequencyBands,
     speedMultiplier: number
@@ -923,14 +1518,16 @@ export class GameEngine {
     this.finishRecorded = true;
     this.running = false;
     this.paused = false;
-    this.isJumpHeld = false;
-    this.isDiveHeld = false;
+    this.laneHighHeld = false;
+    this.laneLowHeld = false;
+    this.laneChordHeld = false;
     this.hitstopTimer = 0;
     this.audio.stop();
     this.audio.sfx.playStageFail();
+    const rx = this.getReticleScreenX();
     const renderPy = this.getRenderPlayerY();
-    this.vfx.spawnShockwave(playerScreenX, renderPy, 20, 190, [255, 42, 109], 1.0);
-    this.vfx.spawnBurst(playerScreenX, renderPy, [255, 42, 109], 22);
+    this.vfx.spawnShockwave(rx, renderPy, 20, 195, CRIMSON_RGB, 1.0);
+    this.vfx.spawnBurst(rx, renderPy, CRIMSON_RGB, 24);
     this.setBanner({ key: 'grooveDepleted' }, 3.0);
     this.hudDirty = false;
     this.hudPublishAccum = 0;
@@ -945,233 +1542,56 @@ export class GameEngine {
     return overdriveMult * dropMult;
   }
 
-  private emitJudgment(
+  private emitSlashJudgment(
     grade: JudgmentGrade,
     screenX: number,
     screenY: number,
-    deltaMs?: number,
-    basePoints: number = 220,
-    signedDeltaMs?: number,
-    suppressGaugeGain: boolean = false
-  ): void {
-    this.scoreJudge.recordJudgment(
+    deltaMs: number | undefined,
+    basePoints: number,
+    signedDeltaMs: number | undefined,
+    isCritical: boolean,
+    lane: SlashLane | 'chord'
+  ): number {
+    const bonusPoints = this.scoreJudge.recordJudgment(
       grade,
       deltaMs,
       basePoints,
       this.getActiveScoreMultiplier(),
-      signedDeltaMs
+      signedDeltaMs,
+      { isCritical, lane }
     );
 
-    const gaugeMult = this.activeForm === 'synth' ? 1.2 : 1.0;
+    const profile = this.playerController.profile;
+    const gaugeMult = profile.gaugeChargeMult;
+    const swScale = profile.shockwaveScale;
 
     if (grade === 'PERFECT') {
       this.beatPulse = 1.0;
       this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.1);
-      if (!suppressGaugeGain) this.addResonanceGauge(5.5 * gaugeMult);
+      this.addResonanceGauge((isCritical ? 6.8 : 5.5) * gaugeMult);
       this.healGrooveHp(
-        (this.difficulty === 'hard' ? 1.8 : 2.4) * (this.scoreJudge.combo >= 25 ? 1.5 : 1.0)
+        (this.difficulty === 'hard' ? 1.8 : 2.4) * (this.scoreJudge.combo >= 25 ? 1.4 : 1.0)
       );
-      this.vfx.spawnShockwave(screenX, screenY, 14, 92, [255, 230, 0], 0.95);
-      this.vfx.spawnBurst(screenX, screenY, [255, 230, 0], 12);
+      this.vfx.spawnShockwave(
+        screenX,
+        screenY,
+        14,
+        (isCritical ? 118 : 92) * swScale,
+        isCritical ? GOLD_RGB : lane === 'high' ? CYAN_RGB : CRIMSON_RGB,
+        0.95
+      );
+      this.vfx.spawnBurst(screenX, screenY, isCritical ? GOLD_RGB : CYAN_RGB, isCritical ? 14 : 10);
     } else if (grade === 'GREAT') {
       this.beatPulse = Math.max(this.beatPulse, 0.55);
       this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.06);
-      if (!suppressGaugeGain) this.addResonanceGauge(3.5 * gaugeMult);
+      this.addResonanceGauge(3.6 * gaugeMult);
       this.healGrooveHp(this.difficulty === 'hard' ? 0.6 : 0.9);
-      this.vfx.spawnBurst(screenX, screenY, [5, 213, 255], 8);
+      this.vfx.spawnBurst(screenX, screenY, lane === 'high' ? CYAN_RGB : CRIMSON_RGB, 8);
     } else if (grade === 'GOOD') {
-      if (!suppressGaugeGain) this.addResonanceGauge(1.8 * gaugeMult);
-    } else if (grade === 'MISS') {
-      this.surfMomentum = Math.max(0.15, this.surfMomentum * 0.5);
+      this.addResonanceGauge(1.8 * gaugeMult);
+      this.vfx.spawnBurst(screenX, screenY, [180, 220, 255], 5);
     }
-  }
-
-  private collectOrbWithSynergy(
-    orb: ResonanceOrb,
-    playerScreenX: number,
-    audioSec: number
-  ): void {
-    orb.collected = true;
-    this.scoreJudge.recordOrbCollected();
-    const oy = orb.screenY ?? orb.worldY;
-
-    if (orb.isPrismStar) {
-      this.scoreJudge.recordStarCollected();
-      this.addResonanceGauge(20);
-      this.healGrooveHp(this.difficulty === 'hard' ? 15 : 18);
-      this.audio.sfx.playPrismStar();
-      this.triggerScreenShake(0.22, 6.5);
-      this.vfx.spawnShockwave(playerScreenX, oy, 18, 165, [255, 230, 0], 1.0);
-      this.vfx.spawnBurst(playerScreenX, oy, [255, 230, 0], 24);
-      this.emitJudgment('PERFECT', playerScreenX, oy, 0, 1500, 0, true);
-      this.setBanner(
-        {
-          key: 'prismStar',
-          params: {
-            collected: this.scoreJudge.starsCollected,
-            total: this.terrain.getTotalStarCount() || 3,
-          },
-        },
-        1.65
-      );
-      return;
-    }
-
-    const targetSec = orb.timeSec ?? orb.worldX / this.baseSpeed;
-    const rawSignedMs = Math.round((audioSec - targetSec) * 1000);
-    const deltaMs = Math.abs(rawSignedMs);
-    const grade = this.scoreJudge.classifyDeltaMs(deltaMs, this.difficulty);
-    const isResonantHit = grade === 'PERFECT' || this.overdriveTimer > 0;
-    this.audio.sfx.playNoteHit(orb.band, grade, isResonantHit);
-    const basePts = orb.isBeatTarget ? 320 : 220;
-    this.emitJudgment(grade, playerScreenX, oy, deltaMs, basePts, rawSignedMs);
-    if (isResonantHit) {
-      this.vfx.spawnBurst(playerScreenX, oy, FORM_CONFIG[orb.band].rgb, 7);
-    }
-  }
-
-  /**
-   * When the player actively presses Jump or Skill/Dash, snaps nearby beat targets
-   * within a tight vertical window (`dy <= 68px`) so deliberate rhythm tapping feels razor-sharp
-   * without vacuuming upper-deck notes prematurely!
-   */
-  private judgeNearbyBeatTargetOnInput(playerScreenX: number, playerWorldX: number): void {
-    const audioSec = this.audio.getElapsedSec();
-    this.lastActionAudioSec = audioSec;
-    const cfg = DIFFICULTY_CONFIG[this.difficulty];
-    const windowPx = (cfg.goodMs / 1000) * this.baseSpeed + 24;
-
-    // 1. Check Airborne Dash Rings first
-    for (const ring of this.terrain.getDashRings()) {
-      if (ring.triggered) continue;
-      const dx = Math.abs(ring.worldX - playerWorldX);
-      const ry = ring.screenY ?? ring.worldY;
-      const dy = Math.abs(ry - this.playerY);
-      if (dx <= windowPx + ring.radius && dy <= ring.radius + this.playerRadius + 46) {
-        this.activateDashRing(ring, playerScreenX, audioSec);
-        return;
-      }
-    }
-
-    // 2. Check closest uncollected Beat Note within tight vertical reach
-    let bestOrb: ResonanceOrb | null = null;
-    let bestDx = Infinity;
-    for (const orb of this.terrain.getOrbs()) {
-      if (orb.collected) continue;
-      const dx = Math.abs(orb.worldX - playerWorldX);
-      const oy = orb.screenY ?? orb.worldY;
-      const dy = Math.abs(oy - this.playerY);
-      const maxVerticalSnap = orb.isPrismStar ? 48 : 68;
-      if (dx <= windowPx && dy <= maxVerticalSnap && dx < bestDx) {
-        bestDx = dx;
-        bestOrb = orb;
-      }
-    }
-
-    if (bestOrb) {
-      this.collectOrbWithSynergy(bestOrb, playerScreenX, audioSec);
-    }
-  }
-
-  public handlePrimaryAction(): void {
-    if (!this.running || this.paused) return;
-    this.isJumpHeld = true;
-
-    const playerScreenX = this.getPlayerScreenX();
-    const playerWorldX = this.cameraX + playerScreenX;
-
-    this.judgeNearbyBeatTargetOnInput(playerScreenX, playerWorldX);
-
-    // If activateDashRing just triggered an air boost, don't overwrite its horizontal trajectory
-    if (this.airBoostTimer > 0.24) return;
-
-    const profile = this.playerController.profile;
-    if (this.isGrounded || this.jumpsRemaining > 0) {
-      const isSecondJump = !this.isGrounded;
-      this.playerVy = isSecondJump ? profile.secondJumpVelocity : profile.jumpVelocity;
-      this.isGrounded = false;
-      this.isGrinding = false;
-      this.slamActive = false;
-      this.jumpsRemaining = Math.max(
-        0,
-        (isSecondJump ? this.jumpsRemaining : profile.maxJumps) - 1
-      );
-      this.audio.sfx.playJump(isSecondJump);
-      this.vfx.spawnBurst(
-        playerScreenX,
-        this.playerY + this.playerRadius,
-        FORM_CONFIG[this.activeForm].rgb,
-        9
-      );
-    }
-  }
-
-  public handleSecondaryAction(): void {
-    if (!this.running || this.paused || this.dashCooldown > 0) return;
-
-    const profile = this.playerController.profile;
-    const playerScreenX = this.getPlayerScreenX();
-    const playerWorldX = this.cameraX + playerScreenX;
-
-    this.strikeTimer = 0.28;
-    this.judgeNearbyBeatTargetOnInput(playerScreenX, playerWorldX);
-
-    if (this.activeForm === 'bass') {
-      if (!this.isGrounded) {
-        this.playerVy = 1320;
-        this.slamActive = true;
-        this.dashCooldown = profile.dashCooldownSec;
-        this.hudDirty = true;
-      } else {
-        this.dashCooldown = profile.dashCooldownSec;
-        this.hudDirty = true;
-        this.triggerBassShockwave(playerScreenX, this.getRenderPlayerY(), playerWorldX);
-      }
-      return;
-    }
-
-    this.dashTimer = profile.dashDurationSec;
-    this.dashCooldown = profile.dashCooldownSec;
-    this.hudDirty = true;
-    this.playerVy = 0;
-    this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.25);
-
-    if (profile.piercesTrapsDuringDash) {
-      this.invulnerableTimer = Math.max(this.invulnerableTimer, profile.dashDurationSec + 0.12);
-      this.setBanner({ key: 'blinkDash' }, 0.9);
-    } else if (this.activeForm === 'synth') {
-      this.vfx.spawnShockwave(playerScreenX, this.playerY, 18, 210, FORM_CONFIG.synth.rgb, 0.9);
-      this.setBanner({ key: 'magneticPulse' }, 0.9);
-    }
-  }
-
-  private activateDashRing(
-    ring: { worldX: number; worldY: number; screenY?: number; timeSec: number; triggered: boolean },
-    playerScreenX: number,
-    audioSec: number
-  ): void {
-    ring.triggered = true;
-    this.scoreJudge.recordGimmickTriggered();
-    const ry = ring.screenY ?? ring.worldY;
-    this.playerY = ry;
-    this.playerVy = 0;
-    this.isGrounded = false;
-    this.slamActive = false;
-    this.airBoostTimer = 0.3;
-    this.strikeTimer = 0.32;
-    this.invulnerableTimer = Math.max(this.invulnerableTimer, 0.36);
-    this.jumpsRemaining = this.playerController.profile.maxJumps;
-    this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.3);
-    this.audio.sfx.playDashRing();
-
-    const rawSignedMs = Math.round((audioSec - ring.timeSec) * 1000);
-    const deltaMs = Math.abs(rawSignedMs);
-    const inputRecent = Math.abs(audioSec - this.lastActionAudioSec) <= 0.16;
-    const grade: JudgmentGrade = inputRecent
-      ? this.scoreJudge.classifyDeltaMs(deltaMs, this.difficulty)
-      : 'GREAT';
-    this.emitJudgment(grade, playerScreenX, ry, deltaMs, 320, rawSignedMs);
-    this.setBanner({ key: 'wavePump' }, 1.1);
+    return bonusPoints;
   }
 
   private loop = (now: number): void => {
@@ -1198,19 +1618,13 @@ export class GameEngine {
   private updateFrame(dt: number): void {
     if (this.paused) return;
     const freq = this.audio.getFrequencyData();
-    const audioSec = this.audio.getElapsedSec();
+    const effectiveAudioSec = this.audio.getEffectiveElapsedSec();
 
     if (this.hitstopCooldownTimer > 0) {
       this.hitstopCooldownTimer = Math.max(0, this.hitstopCooldownTimer - dt);
     }
     if (this.hitstopTimer > 0) {
       this.hitstopTimer = Math.max(0, this.hitstopTimer - dt);
-    } else {
-      const lagDecay = Math.exp(-dt * 42);
-      const nextLagX = this.visualLagX * lagDecay;
-      const nextLagY = this.visualLagY * lagDecay;
-      this.visualLagX = Math.abs(nextLagX) < 0.05 ? 0 : nextLagX;
-      this.visualLagY = Math.abs(nextLagY) < 0.05 ? 0 : nextLagY;
     }
 
     if (this.statusBannerTimer > 0) {
@@ -1222,27 +1636,42 @@ export class GameEngine {
     }
     this.scoreJudge.tick(dt);
 
-    if (this.dashCooldown > 0) {
-      const prevCooldown = this.dashCooldown;
-      this.dashCooldown = Math.max(0, this.dashCooldown - dt);
-      if (prevCooldown > 0 && this.dashCooldown === 0) {
-        this.hudDirty = true;
-      }
+    // Decay HUD key-flash timers and notify React immediately on transition to false
+    if (this.highKeyFlashTimer > 0) {
+      this.highKeyFlashTimer = Math.max(0, this.highKeyFlashTimer - dt);
+      if (this.highKeyFlashTimer === 0 && !this.laneHighHeld) this.hudDirty = true;
     }
-    if (this.strikeTimer > 0) this.strikeTimer = Math.max(0, this.strikeTimer - dt);
+    if (this.lowKeyFlashTimer > 0) {
+      this.lowKeyFlashTimer = Math.max(0, this.lowKeyFlashTimer - dt);
+      if (this.lowKeyFlashTimer === 0 && !this.laneLowHeld) this.hudDirty = true;
+    }
+    if (this.chordKeyFlashTimer > 0) {
+      this.chordKeyFlashTimer = Math.max(0, this.chordKeyFlashTimer - dt);
+      if (this.chordKeyFlashTimer === 0 && !this.laneChordHeld) this.hudDirty = true;
+    }
+
     if (this.invulnerableTimer > 0) {
       this.invulnerableTimer = Math.max(0, this.invulnerableTimer - dt);
     }
-    if (this.grooveDamageCooldown > 0) {
-      this.grooveDamageCooldown = Math.max(0, this.grooveDamageCooldown - dt);
+    if (this.hazardDamageCooldown > 0) {
+      this.hazardDamageCooldown = Math.max(0, this.hazardDamageCooldown - dt);
     }
     if (this.shakeTimer > 0) {
       this.shakeTimer = Math.max(0, this.shakeTimer - dt);
     }
+    if (this.reticlePulseHigh > 0) {
+      this.reticlePulseHigh = Math.max(0, this.reticlePulseHigh - dt * 7.2);
+    }
+    if (this.reticlePulseLow > 0) {
+      this.reticlePulseLow = Math.max(0, this.reticlePulseLow - dt * 7.2);
+    }
+    if (this.slashRecoilX > 0) {
+      this.slashRecoilX *= Math.exp(-dt * 24);
+      if (this.slashRecoilX < 0.1) this.slashRecoilX = 0;
+    }
+
     if (this.overdriveTimer > 0) {
-      if (!this.paused) {
-        this.healGrooveHp((this.difficulty === 'hard' ? 3.0 : 4.0) * dt);
-      }
+      this.healGrooveHp((this.difficulty === 'hard' ? 2.8 : 3.8) * dt);
       this.overdriveTimer = Math.max(0, this.overdriveTimer - dt);
       this.resonanceGauge = (this.overdriveTimer / OVERDRIVE_DURATION_SEC) * 100;
       if (this.overdriveTimer === 0) {
@@ -1250,6 +1679,7 @@ export class GameEngine {
         this.hudDirty = true;
       }
     }
+
     if (this.beatPulse > 0) {
       this.beatPulse = Math.max(0, this.beatPulse - dt * 5.2);
     }
@@ -1260,52 +1690,33 @@ export class GameEngine {
       );
     }
 
-    const profile = this.playerController.profile;
-    let speedMultiplier = 1.0 + this.surfMomentum * 0.65 + freq.overall * 0.15;
-    if (this.overdriveTimer > 0) {
-      speedMultiplier += 0.35;
-    }
-    if (this.airBoostTimer > 0) {
-      this.airBoostTimer = Math.max(0, this.airBoostTimer - dt);
-      speedMultiplier = 2.35;
-    } else if (this.dashTimer > 0) {
-      this.dashTimer = Math.max(0, this.dashTimer - dt);
-      speedMultiplier = profile.dashSpeedMultiplier;
-    } else if (this.isGrinding) {
-      speedMultiplier += 0.35 + (profile.slopeGrindMultiplier - 1.0) * 0.65;
-    } else if (this.isGrounded && this.playerRotation > 0.04) {
-      speedMultiplier += Math.min(0.22, this.playerRotation * 0.45) * profile.slopeGrindMultiplier;
-    }
+    let speedMultiplier = 1.0 + this.surfMomentum * 0.55 + freq.overall * 0.15;
+    if (this.overdriveTimer > 0) speedMultiplier += 0.35;
+    if (this.isGrinding) speedMultiplier += 0.25;
     this.lastSpeedMultiplier = speedMultiplier;
 
-    // 0.65s Lookahead Dynamic Vector Cinematic Framing (unified hitXRatio + cinematicZoom, 0.0ms beat sync!)
-    const { targetCineZoom, targetHitXRatio } = this.computeCinematicTargets(audioSec);
-    this.hitXRatio += (targetHitXRatio - this.hitXRatio) * (1 - Math.exp(-dt * 3.2));
-    const cineRate = targetCineZoom < this.cinematicZoom ? 4.8 : 2.2;
+    const targetCineZoom = this.computeTargetCinematicZoom(effectiveAudioSec);
+    const cineRate = targetCineZoom < this.cinematicZoom ? 4.5 : 2.2;
     this.cinematicZoom += (targetCineZoom - this.cinematicZoom) * (1 - Math.exp(-dt * cineRate));
     this.impactZoomPunch *= Math.exp(-dt * 18);
     if (this.impactZoomPunch < 0.0005) this.impactZoomPunch = 0;
 
-    const playerScreenX = this.getPlayerScreenX();
-    // Exact 0.0ms synchronization: advance by baseSpeed * dt first, then correct residual clock drift!
-    const targetCameraX = audioSec * this.baseSpeed - playerScreenX;
+    // 1:1 Reticle-Synchronized Camera Scroll (`reticleWorldX === effectiveAudioSec * baseSpeed`)
+    const reticleScreenX = this.getReticleScreenX();
+    const targetCameraX = effectiveAudioSec * this.baseSpeed - reticleScreenX;
     if (this.audio.playing) {
       const predictedCameraX = this.cameraX + this.baseSpeed * dt;
       const drift = targetCameraX - predictedCameraX;
-      if (Math.abs(drift) > this.baseSpeed * 0.6) {
+      if (Math.abs(drift) > this.baseSpeed * 0.14) {
         this.cameraX = targetCameraX;
       } else {
-        this.cameraX = predictedCameraX + drift * Math.min(1, dt * 18);
+        this.cameraX = predictedCameraX + drift * Math.min(1, dt * 24);
       }
     } else {
-      this.cameraX += this.baseSpeed * dt;
+      this.cameraX = targetCameraX;
     }
 
-    if (this.isGrounded || this.isGrinding) {
-      this.runCycleTime += dt * speedMultiplier * 1.12;
-    }
-
-    const playerWorldX = this.cameraX + playerScreenX;
+    this.runCycleTime += dt * speedMultiplier * 1.18;
 
     this.terrain.update(
       this.cameraX,
@@ -1316,28 +1727,18 @@ export class GameEngine {
       this.computeViewWorldBounds(true)
     );
 
-    if (this.hitstopTimer > 0) {
-      this.visualLagX = this.cameraX - this.hitstopFreezeCameraX;
-      this.visualLagY = this.playerY - this.hitstopFreezePlayerY;
-    }
-    const preMacroRenderCamX = this.getRenderCameraX();
-    const renderStepX = Math.max(0, preMacroRenderCamX - this.prevRenderCameraX);
-    this.vfx.update(dt, renderStepX);
+    const renderStepX = Math.max(0, this.cameraX - this.prevRenderCameraX);
+    this.vfx.update(dt, renderStepX, this.hitstopTimer > 0);
+    this.prevRenderCameraX = this.cameraX;
 
-    this.updateMacroPhase(dt, playerScreenX, playerWorldX, audioSec, speedMultiplier);
-
-    if (this.hitstopTimer > 0) {
-      this.visualLagX = this.cameraX - this.hitstopFreezeCameraX;
-      this.visualLagY = this.playerY - this.hitstopFreezePlayerY;
-    }
-    this.prevRenderCameraX = this.getRenderCameraX();
+    this.updateLanePostureAndTargets(dt, effectiveAudioSec);
 
     if (!this.isFailed && this.difficulty !== 'easy' && this.grooveHp <= 0) {
-      this.triggerStageFail(playerScreenX, audioSec, freq, speedMultiplier);
+      this.triggerStageFail(effectiveAudioSec, freq, speedMultiplier);
       return;
     }
 
-    this.renderCurrentState(audioSec, freq);
+    this.renderCurrentState(effectiveAudioSec, freq);
 
     const progress = this.audio.getProgress();
     const isFinished =
@@ -1386,8 +1787,329 @@ export class GameEngine {
     }
   }
 
+  private updateLanePostureAndTargets(dt: number, effectiveAudioSec: number): void {
+    const reticleScreenX = this.getReticleScreenX();
+    const reticleWorldX = this.cameraX + reticleScreenX;
+    const { floorY, angleRad, segment } = this.terrain.sampleFloor(reticleWorldX);
+
+    const nextIntensity = segment?.intensity ?? 'groove';
+    if (nextIntensity !== this.currentSectionIntensity) {
+      if (nextIntensity === 'drop') {
+        this.setBanner({ key: 'dropSection' }, 1.65);
+        this.beatPulse = 1.0;
+        this.vfx.spawnBurst(reticleScreenX, this.playerY, FORM_CONFIG[this.activeForm].rgb, 18);
+      }
+      this.currentSectionIntensity = nextIntensity;
+      this.hudDirty = true;
+    }
+
+    if (
+      segment?.isBeatOnset &&
+      segment.sliceIndex !== undefined &&
+      segment.sliceIndex !== this.lastBeatSliceIndex
+    ) {
+      this.lastBeatSliceIndex = segment.sliceIndex;
+      this.beatPulse = Math.max(this.beatPulse, 0.36);
+      this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.04);
+    }
+
+    // 1. Update active HOLD ribbons, CHORD partial expiry, RUSH expiry, late MISS & Hazard collisions
+    const cfg = DIFFICULTY_CONFIG[this.difficulty];
+    const goodSec = cfg.goodMs / 1000;
+    const allTargets = this.terrain.getAllTargets();
+
+    while (
+      this.firstUnresolvedIdx < allTargets.length &&
+      allTargets[this.firstUnresolvedIdx]!.resolved
+    ) {
+      this.firstUnresolvedIdx++;
+    }
+
+    const highY = this.terrain.getLaneHighScreenY();
+    const lowY = this.terrain.getLaneLowScreenY();
+    const midY = (highY + lowY) * 0.5;
+    let activeHoldLane: SlashLane | null = null;
+
+    for (let i = this.firstUnresolvedIdx; i < allTargets.length; i++) {
+      const target = allTargets[i]!;
+      if (target.resolved) continue;
+      if (target.timeSec > effectiveAudioSec + goodSec + 0.35) break;
+
+      if (target.kind === 'chord') {
+        if (target.chordPartialLane !== undefined && target.chordPartialSec !== undefined) {
+          if (
+            effectiveAudioSec - target.chordPartialSec > CHORD_SYNC_WINDOW_SEC ||
+            effectiveAudioSec > target.timeSec + goodSec
+          ) {
+            // [Fix 4] Single-hand CHORD partial expires -> settle as 50% GOOD hit (zero stuck targets)
+            target.resolved = true;
+            target.hitGrade = 'GOOD';
+            this.scoreJudge.recordOrbCollected();
+            const partialLane = target.chordPartialLane;
+            const py = partialLane === 'high' ? highY : lowY;
+            this.collectPrismStarIfPresent(target, reticleScreenX, py);
+            this.audio.sfx.playSlashHit(partialLane, 'GOOD', false);
+            this.emitSlashJudgment(
+              'GOOD',
+              reticleScreenX,
+              py,
+              Math.abs(target.chordPartialSignedMs ?? 0),
+              260,
+              target.chordPartialSignedMs,
+              false,
+              partialLane
+            );
+            this.vfx.spawnSlicedEnemy(
+              reticleScreenX,
+              py,
+              target.radius * 0.85,
+              partialLane === 'high' ? -0.4 : 0.4,
+              GOLD_RGB,
+              Boolean(target.isPrismStar)
+            );
+          }
+        } else if (effectiveAudioSec > target.timeSec + goodSec) {
+          target.resolved = true;
+          target.hitGrade = 'MISS';
+          this.handleMissedTarget(target, true);
+        }
+        continue;
+      }
+
+      if (target.kind === 'hold') {
+        const endSec = target.endTimeSec ?? target.timeSec + 0.5;
+        if (target.holdActive) {
+          const laneY = target.lane === 'high' ? highY : lowY;
+          const isHeld =
+            this.laneChordHeld ||
+            (target.lane === 'high' ? this.laneHighHeld : this.laneLowHeld);
+
+          if (effectiveAudioSec >= endSec - 0.05) {
+            // [Fix 4] HOLD ribbon tail completion
+            target.holdActive = false;
+            target.resolved = true;
+            this.scoreJudge.recordGimmickTriggered();
+            const tailBonus = Math.round(
+              240 *
+                this.playerController.profile.chordHoldScoreMult *
+                this.getActiveScoreMultiplier()
+            );
+            this.scoreJudge.addRawScore(tailBonus);
+            this.addResonanceGauge(4.5 * this.playerController.profile.gaugeChargeMult);
+            this.audio.sfx.playSlashHit(target.lane, 'PERFECT', true);
+            this.vfx.spawnSlicedEnemy(
+              reticleScreenX,
+              laneY,
+              target.radius,
+              target.lane === 'high' ? -0.35 : 0.35,
+              target.lane === 'high' ? CYAN_RGB : CRIMSON_RGB,
+              false
+            );
+            this.vfx.spawnBurst(
+              reticleScreenX,
+              laneY,
+              target.lane === 'high' ? CYAN_RGB : CRIMSON_RGB,
+              12
+            );
+          } else if (isHeld) {
+            activeHoldLane = target.lane;
+            target.holdReleaseGraceSec = 0.075;
+            let safetyTicks = 0;
+            while (
+              effectiveAudioSec >= (target.holdNextTickSec ?? effectiveAudioSec) &&
+              safetyTicks < 4
+            ) {
+              safetyTicks++;
+              target.holdNextTickSec = (target.holdNextTickSec ?? effectiveAudioSec) + 0.1;
+              const holdMult =
+                this.playerController.profile.chordHoldScoreMult *
+                this.getActiveScoreMultiplier();
+              this.scoreJudge.addHoldRailTick(holdMult);
+              this.addResonanceGauge(1.4 * this.playerController.profile.gaugeChargeMult);
+              this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.03);
+              this.audio.sfx.playHoldTick();
+              this.vfx.spawnParticle(
+                reticleScreenX - 6,
+                laneY,
+                -150 - Math.random() * 110,
+                (Math.random() - 0.5) * 90,
+                4.0,
+                target.lane === 'high' ? CYAN_RGB : CRIMSON_RGB,
+                1.0,
+                0.24
+              );
+            }
+          } else {
+            target.holdReleaseGraceSec = (target.holdReleaseGraceSec ?? 0.075) - dt;
+            if (target.holdReleaseGraceSec <= 0) {
+              target.holdActive = false;
+              target.resolved = true;
+            } else {
+              activeHoldLane = target.lane;
+            }
+          }
+        } else if (effectiveAudioSec > target.timeSec + goodSec) {
+          target.resolved = true;
+          target.hitGrade = 'MISS';
+          this.handleMissedTarget(target, false);
+        }
+        continue;
+      }
+
+      if (target.kind === 'rush') {
+        const endSec = target.endTimeSec ?? target.timeSec + 1.2;
+        if (effectiveAudioSec > endSec) {
+          target.resolved = true;
+          const hits = target.rushHits ?? 0;
+          const req = target.rushTargetHits ?? 8;
+          this.activeRushCombo = 0;
+          this.hudDirty = true;
+
+          if (hits >= Math.ceil(req * 0.5)) {
+            target.hitGrade = 'GREAT';
+            this.scoreJudge.recordOrbCollected();
+            this.collectPrismStarIfPresent(target, reticleScreenX, midY);
+            this.audio.sfx.playSlashHit('chord', 'GREAT', false);
+            this.emitSlashJudgment('GREAT', reticleScreenX, midY, 0, 380, 0, false, 'chord');
+            this.vfx.spawnSlicedEnemy(reticleScreenX, midY, target.radius, -0.45, GOLD_RGB);
+          } else if (hits > 0) {
+            target.hitGrade = 'GOOD';
+            this.scoreJudge.recordOrbCollected();
+            this.collectPrismStarIfPresent(target, reticleScreenX, midY);
+            this.audio.sfx.playSlashHit('chord', 'GOOD', false);
+            this.emitSlashJudgment('GOOD', reticleScreenX, midY, 0, 200, 0, false, 'chord');
+            this.vfx.spawnSlicedEnemy(reticleScreenX, midY, target.radius, -0.35, CYAN_RGB);
+          } else {
+            target.hitGrade = 'MISS';
+            this.handleMissedTarget(target, true);
+          }
+        }
+        continue;
+      }
+
+      if (target.kind === 'high' || target.kind === 'low') {
+        if (effectiveAudioSec > target.timeSec + goodSec) {
+          target.resolved = true;
+          target.hitGrade = 'MISS';
+          this.handleMissedTarget(target, false);
+        }
+        continue;
+      }
+
+      if (target.kind === 'sawblade' || target.kind === 'mine') {
+        const hazY = target.lane === 'high' ? highY : lowY;
+        const deltaSec = effectiveAudioSec - target.timeSec;
+
+        if (Math.abs(deltaSec) <= 0.055) {
+          if (this.overdriveTimer > 0) {
+            // Overdrive shatters hazards ONLY (never auto-plays slash targets)
+            target.resolved = true;
+            this.scoreJudge.recordTrapDestroyed();
+            this.scoreJudge.addRawScore(Math.round(250 * this.getActiveScoreMultiplier()));
+            this.audio.sfx.playHazardShatter();
+            this.vfx.spawnSlicedEnemy(reticleScreenX, hazY, target.radius, -0.42, GOLD_RGB);
+            this.vfx.spawnBurst(reticleScreenX, hazY, GOLD_RGB, 14);
+          } else if (this.playerLane === target.lane && this.chordPoseTimer <= 0) {
+            target.resolved = true;
+            target.hitGrade = 'MISS';
+            this.applyHazardDamage();
+            this.scoreJudge.recordJudgment('MISS', undefined, 0, 1, undefined, {
+              lane: target.lane,
+            });
+            this.audio.sfx.playMiss();
+            this.triggerScreenShake(0.24, 7.5);
+            this.vfx.spawnBurst(reticleScreenX, hazY, CRIMSON_RGB, 18);
+            this.setBanner({ key: 'hazardHit' }, 1.15);
+          }
+        } else if (deltaSec > 0.055) {
+          // Cleanly dodged opposite-lane hazard via active Attack=Dodge positioning!
+          target.resolved = true;
+          this.scoreJudge.recordGimmickTriggered();
+          const dodgeBonus = Math.round(180 * this.getActiveScoreMultiplier());
+          this.scoreJudge.addRawScore(dodgeBonus);
+          this.addResonanceGauge(3.8 * this.playerController.profile.gaugeChargeMult);
+          this.audio.sfx.playCleanDodge();
+          this.vfx.spawnAfterimage(
+            this.getPlayerRenderScreenX(),
+            this.getRenderPlayerY(),
+            this.playerRotation,
+            this.activeForm,
+            0.72
+          );
+          this.setBanner({ key: 'cleanDodge', params: { bonus: dodgeBonus } }, 0.95);
+        }
+      }
+    }
+
+    // 2. Update Crewmate 2-Lane Posture & Auto-Return from HIGH hang (`0.48s`)
+    this.isGrinding = activeHoldLane !== null;
+    if (activeHoldLane !== null) {
+      if (this.playerLane !== activeHoldLane) {
+        this.playerLane = activeHoldLane;
+        this.hudDirty = true;
+      }
+      if (activeHoldLane === 'high') {
+        this.highAirHangTimer = Math.max(this.highAirHangTimer, 0.14);
+      }
+    }
+
+    if (this.chordPoseTimer > 0) {
+      this.chordPoseTimer = Math.max(0, this.chordPoseTimer - dt);
+    } else if (this.playerLane === 'high') {
+      if (this.laneHighHeld) {
+        this.highAirHangTimer = Math.max(this.highAirHangTimer, 0.1);
+      } else {
+        this.highAirHangTimer = Math.max(0, this.highAirHangTimer - dt);
+        if (this.highAirHangTimer === 0) {
+          this.playerLane = 'low';
+          this.hudDirty = true;
+        }
+      }
+      const targetY = this.playerLane === 'high' ? highY : lowY;
+      this.playerY += (targetY - this.playerY) * Math.min(1, dt * 26);
+      this.playerRotation += (-0.08 - this.playerRotation) * Math.min(1, dt * 14);
+    } else {
+      const groundTargetY = Math.min(lowY, floorY - this.playerRadius);
+      this.playerY += (groundTargetY - this.playerY) * Math.min(1, dt * 28);
+      this.playerRotation += (angleRad - this.playerRotation) * Math.min(1, dt * 16);
+
+      if (Math.random() < 0.28) {
+        this.vfx.spawnParticle(
+          this.getPlayerRenderScreenX() - 10,
+          floorY - 2,
+          -125 - Math.random() * 105,
+          -20 - Math.random() * 50,
+          2.6,
+          FORM_CONFIG[this.activeForm].secondaryRgb,
+          0.85,
+          0.2
+        );
+      }
+    }
+
+    const momentumDecay = (this.activeForm === 'treble' ? 0.015 : 0.022) * dt;
+    this.surfMomentum = Math.max(0.22, Math.min(1.0, this.surfMomentum - momentumDecay));
+
+    if (
+      (this.overdriveTimer > 0 || this.surfMomentum > 0.74) &&
+      Math.floor(this.elapsedSec * 24) % 2 === 0
+    ) {
+      const formsOrder: readonly ResonanceFormType[] = ['bass', 'synth', 'treble'];
+      const trailForm =
+        this.overdriveTimer > 0
+          ? formsOrder[Math.floor(this.elapsedSec * 24) % 3]!
+          : this.activeForm;
+      this.vfx.spawnAfterimage(
+        this.getPlayerRenderScreenX(),
+        this.playerY,
+        this.playerRotation,
+        trailForm,
+        this.overdriveTimer > 0 ? 0.7 : 0.4
+      );
+    }
+  }
+
   private renderCurrentState(audioSec: number, freq: FrequencyBands): void {
-    const playerScreenX = this.getPlayerScreenX();
     const effectiveZoomScale = this.getEffectiveZoomScale();
     const { fx: effectiveFocalX, fy: effectiveFocalY } = this.getEffectiveFocalPoint();
 
@@ -1399,8 +2121,8 @@ export class GameEngine {
       shakeY = Math.cos(this.elapsedSec * 53) * this.shakeIntensity * decay;
     }
     if (this.hitstopTimer > 0 && !this.paused) {
-      shakeX += Math.sin(this.elapsedSec * 190) * 2.4;
-      shakeY += Math.cos(this.elapsedSec * 163) * 1.8;
+      shakeX += Math.sin(this.elapsedSec * 190) * 2.2;
+      shakeY += Math.cos(this.elapsedSec * 163) * 1.6;
     }
 
     this.renderer?.renderGameFrame({
@@ -1426,19 +2148,19 @@ export class GameEngine {
       resonanceGauge: this.resonanceGauge,
       frequency: freq,
       segments: this.terrain.getSegments(),
-      orbs: this.terrain.getOrbs(),
-      skyPlatforms: this.terrain.getSkyPlatforms(),
-      jumpPads: this.terrain.getJumpPads(),
-      dashRings: this.terrain.getDashRings(),
-      holdRails: this.terrain.getHoldRails(),
-      traps: this.terrain.getTraps(),
-      playerScreenX,
+      reticleScreenX: this.getReticleScreenX(),
+      laneHighScreenY: this.terrain.getLaneHighScreenY(),
+      laneLowScreenY: this.terrain.getLaneLowScreenY(),
+      playerLane: this.playerLane,
+      reticlePulseHigh: this.reticlePulseHigh,
+      reticlePulseLow: this.reticlePulseLow,
+      targets: this.terrain.getTargets(),
+      slicedHalves: this.vfx.getSlicedHalves(),
+      playerScreenX: this.getPlayerRenderScreenX(),
       playerScreenY: this.getRenderPlayerY(),
       playerRotation: this.playerRotation,
       playerRadius: this.playerRadius,
-      isDashing: this.dashTimer > 0 || this.airBoostTimer > 0 || this.strikeTimer > 0,
       isGrinding: this.isGrinding,
-      isDiving: this.isDiveHeld,
       surfMomentum: this.surfMomentum,
       sectionIntensity: this.currentSectionIntensity,
       invulnerableTimer: this.invulnerableTimer,
@@ -1456,12 +2178,6 @@ export class GameEngine {
     isFinished: boolean
   ): void {
     const { accuracy, rank } = this.scoreJudge.computeAccuracyAndRank();
-    const profile = this.playerController.profile;
-    const skillCooldownRatio =
-      profile.dashCooldownSec > 0
-        ? Math.min(1, Math.max(0, this.dashCooldown / profile.dashCooldownSec))
-        : 0;
-    const skillCooldownSec = Number(Math.max(0, this.dashCooldown).toFixed(1));
     const neutralPan = this.paused ? this.getClampedNeutralPausedPan() : { panX: 0, panY: 0 };
     const isPanned =
       Math.abs(this.panX - neutralPan.panX) > 1 ||
@@ -1487,15 +2203,15 @@ export class GameEngine {
       newlyUnlockedSkins: this.newlyUnlockedSkins,
       overdriveReady: this.overdriveTimer <= 0 && this.resonanceGauge >= 100,
       overdriveActive: this.overdriveTimer > 0,
-      skillCooldownRatio,
-      skillCooldownSec,
+      skillCooldownRatio: 0,
+      skillCooldownSec: 0,
       statusBanner: this.statusBanner,
       isFinished,
       trapsDestroyed: this.scoreJudge.trapsDestroyed,
       surfMomentum: Number(this.surfMomentum.toFixed(2)),
       speedMultiplier: Number(speedMultiplier.toFixed(1)),
       orbsCollected: this.scoreJudge.orbsCollected,
-      totalOrbs: this.terrain.getTotalOrbCount(),
+      totalOrbs: this.terrain.getTotalSlashTargetCount(),
       starsCollected: this.scoreJudge.starsCollected,
       totalStars: this.terrain.getTotalStarCount() || 3,
       sectionIntensity: this.currentSectionIntensity,
@@ -1509,558 +2225,13 @@ export class GameEngine {
       isPaused: this.paused,
       userZoom: Number(this.userZoom.toFixed(2)),
       isPanned,
+      playerLane: this.playerLane,
+      highKeyFlash: this.laneHighHeld || this.highKeyFlashTimer > 0,
+      lowKeyFlash: this.laneLowHeld || this.lowKeyFlashTimer > 0,
+      chordKeyFlash: this.laneChordHeld || this.chordKeyFlashTimer > 0,
+      rushCombo: this.activeRushCombo > 0 ? this.activeRushCombo : undefined,
+      audioOffsetMs: this.audio.getAudioOffsetMs(),
     });
-  }
-
-  private updateMacroPhase(
-    dt: number,
-    playerScreenX: number,
-    playerWorldX: number,
-    audioSec: number,
-    speedMultiplier: number
-  ): void {
-    const { floorY, angleRad, isGap, segment } = this.terrain.sampleFloor(playerWorldX);
-
-    const nextIntensity = segment?.intensity ?? 'groove';
-    if (nextIntensity !== this.currentSectionIntensity) {
-      if (nextIntensity === 'drop') {
-        this.setBanner({ key: 'dropSection' }, 1.8);
-        this.beatPulse = 1.0;
-        this.vfx.spawnBurst(playerScreenX, this.playerY, FORM_CONFIG[this.activeForm].rgb, 20);
-      }
-      this.currentSectionIntensity = nextIntensity;
-      this.hudDirty = true;
-    }
-
-    if (
-      segment?.isBeatOnset &&
-      segment.sliceIndex !== undefined &&
-      segment.sliceIndex !== this.lastBeatSliceIndex
-    ) {
-      this.lastBeatSliceIndex = segment.sliceIndex;
-      this.beatPulse = Math.max(this.beatPulse, 0.36);
-      this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.05);
-    }
-
-    // 1. Check Active Hold Note Rail (`HoldRail`) lock-on & grinding!
-    let ridingRail = false;
-    for (const rail of this.terrain.getHoldRails()) {
-      if (rail.completed) continue;
-      if (playerWorldX >= rail.x0 - 18 && playerWorldX <= rail.x1 + 18) {
-        const railY = rail.screenY ?? rail.worldY;
-        const closeEnough = Math.abs(this.playerY - railY) <= this.playerRadius + 30;
-        if (closeEnough && (this.isJumpHeld || rail.active || this.playerVy >= -40)) {
-          rail.active = true;
-          ridingRail = true;
-          this.isGrounded = true;
-          this.isGrinding = true;
-          this.slamActive = false;
-          this.playerY += (railY - this.playerY) * Math.min(1, dt * 28);
-          this.playerVy = 0;
-          this.playerRotation = 0;
-          this.jumpsRemaining = this.playerController.profile.maxJumps;
-
-          // Emit continuous rail sparks & combo ticks every 0.10s
-          this.holdTickAccum += dt;
-          if (this.holdTickAccum >= 0.1) {
-            this.holdTickAccum -= 0.1;
-            const railMult =
-              this.overdriveTimer > 0 || this.activeForm === 'synth' ? 1.55 : 1.35;
-            this.scoreJudge.addHoldRailTick(railMult * this.getActiveScoreMultiplier());
-            this.addResonanceGauge(this.activeForm === 'synth' ? 1.32 : 1.1);
-            this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.04);
-            this.vfx.spawnParticle(
-              playerScreenX - 10,
-              railY + this.playerRadius * 0.65,
-              -150 - Math.random() * 120,
-              -30 - Math.random() * 80,
-              4.2,
-              FORM_CONFIG[rail.band].rgb,
-              1.0,
-              0.26
-            );
-          }
-
-          if (playerWorldX >= rail.x1 - 20) {
-            rail.completed = true;
-            this.scoreJudge.recordGimmickTriggered();
-            this.scoreJudge.recordOrbCollected();
-            this.audio.sfx.playNoteHit(rail.band, 'PERFECT', true);
-            this.emitJudgment('PERFECT', playerScreenX, railY, 0, 320, 0);
-            this.setBanner({ key: 'beatBounce' }, 1.1);
-          }
-          break;
-        }
-      }
-    }
-    if (!ridingRail) {
-      this.isGrinding = false;
-    }
-
-    // 2. Vertical Physics, One-Way 2F Sky Platform & Ground Road / Chasm Gap Resolution
-    const prevBottomY = this.playerY + this.playerRadius;
-
-    if (!ridingRail) {
-      if (this.airBoostTimer > 0 || this.dashTimer > 0) {
-        this.playerVy = 0;
-        this.playerRotation = 0;
-        this.vfx.spawnAfterimage(playerScreenX, this.playerY, 0, this.activeForm, 0.82);
-      } else {
-        const baseGravity = this.playerController.profile.gravity;
-        const fastDropMult = !this.isGrounded && this.isDiveHeld ? 2.45 : 1.0;
-        this.playerVy += baseGravity * fastDropMult * dt;
-        this.playerY += this.playerVy * dt;
-      }
-
-      const nextBottomY = this.playerY + this.playerRadius;
-
-      // 2A. Check One-Way 2F Sky Platform Landing
-      const skyPlat =
-        this.playerVy >= 0
-          ? this.terrain.sampleSkyPlatform(playerWorldX, prevBottomY, nextBottomY, this.isDiveHeld)
-          : null;
-
-      if (skyPlat) {
-        const platY = skyPlat.screenY ?? skyPlat.worldY;
-        const wasAir = !this.isGrounded;
-        this.playerY = platY - this.playerRadius;
-        this.playerVy = 0;
-        this.isGrounded = true;
-        this.jumpsRemaining = this.playerController.profile.maxJumps;
-        this.playerRotation = 0;
-        if (wasAir) {
-          if (this.dashCooldown > 0) {
-            this.dashCooldown = 0;
-            this.hudDirty = true;
-          }
-          this.addResonanceGauge(3);
-          this.vfx.spawnBurst(playerScreenX, platY, FORM_CONFIG[skyPlat.band].secondaryRgb, 8);
-          if (this.activeForm === 'bass' && this.slamActive) {
-            this.slamActive = false;
-            this.triggerBassShockwave(playerScreenX, this.getRenderPlayerY(), playerWorldX);
-          }
-        }
-        this.slamActive = false;
-      } else if (!isGap) {
-        // 2B. Solid 1F Ground Sprint Road
-        const targetGroundY = floorY - this.playerRadius;
-        if (this.playerY >= targetGroundY) {
-          const wasAirborne = !this.isGrounded;
-          this.playerY = targetGroundY;
-          this.playerVy = 0;
-          this.isGrounded = true;
-          this.jumpsRemaining = this.playerController.profile.maxJumps;
-          this.playerRotation = angleRad;
-
-          // Subtle sprint dust sparks while running fast
-          if (Math.random() < 0.35) {
-            this.vfx.spawnParticle(
-              playerScreenX - 10,
-              floorY - 2,
-              -120 - Math.random() * 110,
-              -25 - Math.random() * 55,
-              2.8,
-              FORM_CONFIG[this.activeForm].secondaryRgb,
-              0.9,
-              0.22
-            );
-          }
-
-          if (wasAirborne && this.activeForm === 'bass' && this.slamActive) {
-            this.slamActive = false;
-            this.triggerBassShockwave(playerScreenX, this.getRenderPlayerY(), playerWorldX);
-          }
-          this.slamActive = false;
-        } else {
-          this.isGrounded = false;
-          this.playerRotation = Math.max(-0.55, Math.min(0.65, (this.playerVy / 950) * 0.48));
-        }
-      } else {
-        // 2C. Over an Abyss Chasm Gap (`isGap === true`)!
-        this.isGrounded = false;
-        this.playerRotation = Math.max(-0.55, Math.min(0.65, (this.playerVy / 950) * 0.48));
-
-        // Fell into the chasm -> Emergency Bounce Rescue + MISS!
-        if (this.playerY > floorY + 58) {
-          this.playerY = floorY - this.playerRadius - 14;
-          this.playerVy = -680;
-          this.jumpsRemaining = 1;
-          this.slamActive = false;
-          this.invulnerableTimer = 1.1;
-          this.audio.sfx.playMiss();
-          this.triggerScreenShake(0.26, 8.0);
-          this.emitJudgment('MISS', playerScreenX, floorY);
-          this.setBanner({ key: 'gapFall' }, 1.25);
-          this.applyGrooveDamage(24, 32);
-          this.vfx.spawnBurst(playerScreenX, floorY, [255, 50, 95], 18);
-        }
-      }
-    }
-
-    // Gentle momentum baseline while sprinting cleanly (Treble Blink retains momentum 35% longer)
-    const momentumDecay = (this.activeForm === 'treble' ? 0.02 * 0.65 : 0.02) * dt;
-    this.surfMomentum = Math.max(0.22, Math.min(1.0, this.surfMomentum - momentumDecay));
-
-    if (
-      (this.overdriveTimer > 0 || this.surfMomentum > 0.72) &&
-      Math.floor(this.elapsedSec * 24) % 2 === 0
-    ) {
-      const formsOrder: ResonanceFormType[] = ['bass', 'synth', 'treble'];
-      const trailForm =
-        this.overdriveTimer > 0
-          ? formsOrder[Math.floor(this.elapsedSec * 24) % 3]!
-          : this.activeForm;
-      this.vfx.spawnAfterimage(
-        playerScreenX,
-        this.playerY,
-        this.playerRotation,
-        trailForm,
-        this.overdriveTimer > 0 ? 0.72 : 0.42
-      );
-    }
-
-    // Continuous sprint distance score (with smooth soft-cap on ultra-high combos)
-    const runComboFactor = Math.max(1, Math.min(250, this.scoreJudge.combo) * 0.35);
-    this.scoreJudge.addRawScore(
-      dt * 75 * speedMultiplier * runComboFactor * this.getActiveScoreMultiplier()
-    );
-
-    // 3. Check Beat Jump Pads & SlamPads (`JumpPad`)
-    for (const pad of this.terrain.getJumpPads()) {
-      if (pad.triggered) continue;
-      const padY = pad.screenY ?? pad.worldY;
-      const dx = Math.abs(pad.worldX - playerWorldX);
-      const playerBottom = this.playerY + this.playerRadius;
-      if (dx <= 36 && Math.abs(playerBottom - padY) <= 34) {
-        pad.triggered = true;
-        this.scoreJudge.recordGimmickTriggered();
-        if (pad.kind === 'slam') {
-          const isSlamHit =
-            this.overdriveTimer > 0 || this.isDiveHeld || this.slamActive || this.playerVy > 420;
-          this.slamActive = false;
-          this.isGrounded = false;
-          this.jumpsRemaining = this.playerController.profile.maxJumps;
-          if (isSlamHit) {
-            this.playerVy = -895;
-            this.addResonanceGauge(14);
-            this.audio.sfx.playSlamImpact();
-            this.audio.sfx.playBladeSlash();
-            this.triggerHitstop(0.034, 0.08);
-            this.triggerScreenShake(0.26, 8.5);
-            const renderCamX = this.getRenderCameraX();
-            const padScreenX = pad.worldX - renderCamX;
-            this.vfx.spawnSlash(padScreenX, padY - 8, 0, 210, 17, [255, 42, 109], 'slam', 0.2);
-            this.vfx.spawnShockwave(padScreenX, padY, 22, 310, [255, 210, 50], 1.0);
-            this.vfx.spawnBurst(padScreenX, padY, [255, 230, 0], 22);
-            // Shatter nearby hazards with the SlamPad shockwave!
-            let slamShattered = 0;
-            for (const trap of this.terrain.getTraps()) {
-              if (
-                !trap.destroyed &&
-                trap.worldX >= playerWorldX - 90 &&
-                trap.worldX <= playerWorldX + 380
-              ) {
-                trap.destroyed = true;
-                slamShattered++;
-                this.scoreJudge.recordTrapDestroyed();
-                const baseFloorY =
-                  trap.screenFloorY ??
-                  (trap.isAerialDrone
-                    ? this.terrain.sampleFloor(trap.worldX).floorY - 72
-                    : this.terrain.sampleFloor(trap.worldX).floorY);
-                const trapScreenX = trap.worldX - renderCamX;
-                const trapCenterY = trap.isAerialDrone
-                  ? baseFloorY
-                  : baseFloorY - trap.height * 0.5;
-                this.vfx.spawnSlash(
-                  trapScreenX,
-                  trapCenterY,
-                  -0.35,
-                  115,
-                  10,
-                  [255, 42, 109],
-                  'cross',
-                  0.15
-                );
-                this.vfx.spawnBurst(trapScreenX, trapCenterY, [255, 42, 109], 10);
-              }
-            }
-            if (slamShattered > 0 && this.activeForm === 'bass') {
-              this.addResonanceGauge(6 * slamShattered);
-            }
-            const slamBasePts = this.activeForm === 'bass' ? 500 : 400;
-            this.emitJudgment('PERFECT', playerScreenX, padY - 14, 0, slamBasePts, 0, true);
-            this.setBanner({ key: 'slamImpact' }, 1.35);
-          } else {
-            this.playerVy = -560;
-            this.audio.sfx.playJumpPad();
-            this.emitJudgment('GOOD', playerScreenX, padY - 12, undefined, 170, undefined, true);
-          }
-        } else {
-          this.slamActive = false;
-          this.playerVy = -855; // High super-bounce onto 2F Sky Platform or across wide chasm!
-          this.isGrounded = false;
-          this.jumpsRemaining = this.playerController.profile.maxJumps;
-          this.audio.sfx.playJumpPad();
-          const rawSignedMs = Math.round((audioSec - pad.timeSec) * 1000);
-          const deltaMs = Math.abs(rawSignedMs);
-          const inputRecent = Math.abs(audioSec - this.lastActionAudioSec) <= 0.15;
-          this.emitJudgment(
-            inputRecent
-              ? this.scoreJudge.classifyDeltaMs(deltaMs, this.difficulty)
-              : 'PERFECT',
-            playerScreenX,
-            padY - 12,
-            deltaMs,
-            300,
-            rawSignedMs
-          );
-          this.setBanner({ key: 'crestLaunch' }, 1.15);
-        }
-      }
-    }
-
-    // 4. Check Airborne Dash Rings (`DashRing`)
-    for (const ring of this.terrain.getDashRings()) {
-      if (ring.triggered) continue;
-      const ry = ring.screenY ?? ring.worldY;
-      const dist = Math.hypot(ring.worldX - playerWorldX, ry - this.playerY);
-      if (dist <= ring.radius + this.playerRadius + 14) {
-        this.activateDashRing(ring, playerScreenX, audioSec);
-      }
-    }
-
-    // 5. Collect Rhythm Beat Notes & Prism Stars (`ResonanceOrb`) + Omni-Band Magnetism
-    const styleMagnetRadius =
-      this.activeForm === 'synth' ? (this.dashTimer > 0 ? 210 : 128) : 78;
-    const isMagneticSurge =
-      this.overdriveTimer > 0 || (this.activeForm === 'synth' && this.dashTimer > 0);
-    for (const orb of this.terrain.getOrbs()) {
-      if (orb.collected) continue;
-      let orbY = orb.screenY ?? orb.worldY;
-      const magnetRadius =
-        this.overdriveTimer > 0
-          ? orb.isPrismStar
-            ? 195
-            : Math.max(195, styleMagnetRadius)
-          : orb.isPrismStar
-            ? 0
-            : styleMagnetRadius;
-
-      if (magnetRadius > 0) {
-        const distToPlayer = Math.hypot(orb.worldX - playerWorldX, orbY - this.playerY);
-        if (distToPlayer <= magnetRadius && distToPlayer > 1) {
-          const pull = Math.min(1, dt * (isMagneticSurge ? 17 : 13));
-          orb.worldX += (playerWorldX - orb.worldX) * pull;
-          orbY += (this.playerY - orbY) * pull;
-          orb.screenY = orbY;
-        }
-      }
-
-      const dx = orb.worldX - playerWorldX;
-      const dy = orbY - this.playerY;
-      const collectRadius =
-        orb.radius +
-        this.playerRadius +
-        (this.overdriveTimer > 0 || this.dashTimer > 0 || this.airBoostTimer > 0 ? 22 : 14);
-      if (dx * dx + dy * dy <= collectRadius * collectRadius) {
-        this.collectOrbWithSynergy(orb, playerScreenX, audioSec);
-      }
-    }
-
-    // 6. Check Ground Beat Traps & Aerial BeatDrones
-    const isStriking =
-      this.overdriveTimer > 0 ||
-      this.strikeTimer > 0 ||
-      this.dashTimer > 0 ||
-      this.airBoostTimer > 0 ||
-      this.slamActive;
-
-    for (const trap of this.terrain.getTraps()) {
-      if (trap.destroyed) continue;
-
-      if (trap.isAerialDrone) {
-        const droneY = trap.screenFloorY ?? floorY - 72;
-        if (!trap.passed && trap.worldX < playerWorldX - trap.width) {
-          trap.passed = true;
-        }
-        const dist = Math.hypot(trap.worldX - playerWorldX, droneY - this.playerY);
-        const hitRadius = trap.width * 0.5 + this.playerRadius + (isStriking ? 30 : -3);
-        if (dist <= hitRadius) {
-          if (isStriking) {
-            trap.destroyed = true;
-            this.scoreJudge.recordTrapDestroyed();
-            this.scoreJudge.recordGimmickTriggered();
-            // Slicing a BeatDrone instantly refills Dash/Skill & Air Jumps!
-            if (this.dashCooldown > 0) {
-              this.dashCooldown = 0;
-              this.hudDirty = true;
-            }
-            this.jumpsRemaining = this.playerController.profile.maxJumps;
-            this.addResonanceGauge(this.activeForm === 'bass' ? 16 : 10);
-            this.audio.sfx.playHazardShatter();
-            this.audio.sfx.playBladeSlash();
-            this.triggerHitstop(0.032, 0.072);
-            this.triggerScreenShake(0.18, 6.0);
-            const droneScreenX = trap.worldX - this.getRenderCameraX();
-            this.vfx.spawnSlash(
-              droneScreenX,
-              droneY,
-              -0.48,
-              185,
-              15,
-              FORM_CONFIG[this.activeForm].rgb,
-              'cross',
-              0.19
-            );
-            this.vfx.spawnShockwave(droneScreenX, droneY, 16, 155, [5, 213, 255], 1.0);
-            this.vfx.spawnBurst(droneScreenX, droneY, [255, 42, 109], 20);
-            const droneBasePts = this.activeForm === 'bass' ? 425 : 340;
-            this.emitJudgment('PERFECT', droneScreenX, droneY, 0, droneBasePts, 0, true);
-            this.setBanner({ key: 'droneShatter' }, 1.25);
-          } else if (this.invulnerableTimer <= 0) {
-            trap.destroyed = true;
-            this.invulnerableTimer = 1.1;
-            this.playerVy = -380;
-            this.audio.sfx.playMiss();
-            this.triggerScreenShake(0.24, 7.5);
-            this.emitJudgment('MISS', playerScreenX, droneY);
-            this.setBanner({ key: 'trapHit' }, 1.2);
-            this.applyGrooveDamage(22, 28);
-            this.vfx.spawnBurst(playerScreenX, droneY, [255, 50, 95], 16);
-          }
-        }
-        continue;
-      }
-
-      const trapFloorY = trap.screenFloorY ?? floorY;
-      const dx = Math.abs(trap.worldX - playerWorldX);
-
-      if (!trap.passed && trap.worldX < playerWorldX - trap.width) {
-        trap.passed = true;
-        this.emitJudgment('GREAT', playerScreenX, this.playerY - 12, undefined, 150);
-      }
-
-      if (dx < trap.width * 0.55 + this.playerRadius * 0.65) {
-        const playerBottom = this.playerY + this.playerRadius;
-        if (playerBottom > trapFloorY - trap.height + 6) {
-          if (
-            this.overdriveTimer > 0 ||
-            this.airBoostTimer > 0 ||
-            (this.dashTimer > 0 && this.playerController.profile.piercesTrapsDuringDash)
-          ) {
-            trap.destroyed = true;
-            this.scoreJudge.recordTrapDestroyed();
-            if (this.activeForm === 'treble') {
-              if (this.dashCooldown > 0) {
-                this.dashCooldown *= 0.5;
-                this.hudDirty = true;
-              }
-              this.addResonanceGauge(6);
-            } else if (this.activeForm === 'bass') {
-              this.addResonanceGauge(6);
-            }
-            this.audio.sfx.playHazardShatter();
-            this.audio.sfx.playBladeSlash();
-            this.triggerHitstop(0.028, 0.058);
-            this.triggerScreenShake(0.16, 5.5);
-            const trapScreenX = trap.worldX - this.getRenderCameraX();
-            const trapCenterY = trapFloorY - trap.height * 0.5;
-            this.vfx.spawnSlash(
-              trapScreenX,
-              trapCenterY,
-              -0.12,
-              175,
-              13,
-              [255, 230, 0],
-              'pierce',
-              0.16
-            );
-            this.vfx.spawnBurst(trapScreenX, trapCenterY, [255, 230, 0], 14);
-            const trapBasePts = this.activeForm === 'bass' ? 375 : 300;
-            this.emitJudgment('PERFECT', playerScreenX, trapCenterY, 0, trapBasePts, 0);
-          } else if (this.invulnerableTimer <= 0) {
-            trap.destroyed = true;
-            this.invulnerableTimer = 1.1;
-            this.playerVy = -430;
-            this.audio.sfx.playMiss();
-            this.triggerScreenShake(0.25, 8.0);
-            this.emitJudgment('MISS', playerScreenX, this.playerY);
-            this.setBanner({ key: 'trapHit' }, 1.2);
-            this.applyGrooveDamage(22, 28);
-            this.vfx.spawnBurst(playerScreenX, this.playerY, [255, 50, 95], 16);
-          }
-        }
-      }
-    }
-  }
-
-  private triggerBassShockwave(
-    screenX: number,
-    screenY: number,
-    playerWorldX: number
-  ): void {
-    this.audio.sfx.playSlamImpact();
-    this.triggerScreenShake(0.22, 7.0);
-    const renderCamX = this.getRenderCameraX();
-    this.vfx.spawnSlash(
-      screenX + 55,
-      screenY - 6,
-      0,
-      220,
-      18,
-      FORM_CONFIG.bass.rgb,
-      'slam',
-      0.2
-    );
-    this.vfx.spawnShockwave(screenX, screenY, 24, 360, FORM_CONFIG.bass.rgb, 1.0);
-    this.vfx.spawnBurst(screenX, screenY, FORM_CONFIG.bass.rgb, 20);
-
-    let shattered = 0;
-    for (const trap of this.terrain.getTraps()) {
-      if (
-        !trap.destroyed &&
-        trap.worldX >= playerWorldX - 80 &&
-        trap.worldX <= playerWorldX + 420
-      ) {
-        trap.destroyed = true;
-        shattered++;
-        const baseFloorY =
-          trap.screenFloorY ??
-          (trap.isAerialDrone
-            ? this.terrain.sampleFloor(trap.worldX).floorY - 72
-            : this.terrain.sampleFloor(trap.worldX).floorY);
-        const trapScreenX = trap.worldX - renderCamX;
-        const trapCenterY = trap.isAerialDrone ? baseFloorY : baseFloorY - trap.height * 0.5;
-        this.vfx.spawnSlash(
-          trapScreenX,
-          trapCenterY,
-          -0.35,
-          115,
-          10,
-          FORM_CONFIG.bass.rgb,
-          'cross',
-          0.15
-        );
-        this.vfx.spawnBurst(trapScreenX, trapCenterY, FORM_CONFIG.bass.rgb, 10);
-      }
-    }
-    if (shattered > 0) {
-      this.scoreJudge.recordTrapDestroyed(shattered);
-      this.addResonanceGauge(6 * shattered);
-      this.audio.sfx.playHazardShatter();
-      this.audio.sfx.playBladeSlash();
-      this.triggerHitstop(0.032, 0.075);
-      this.emitJudgment('PERFECT', screenX, screenY, 0, 350 * shattered, 0);
-    } else {
-      this.impactZoomPunch = Math.max(this.impactZoomPunch, 0.035);
-    }
-    this.setBanner(
-      shattered > 0
-        ? { key: 'shockwave', params: { count: shattered } }
-        : { key: 'shockwaveNoHit' },
-      1.3
-    );
   }
 
   private setBanner(message: BannerMessage, durationSec: number): void {

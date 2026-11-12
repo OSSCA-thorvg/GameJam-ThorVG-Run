@@ -5,6 +5,8 @@ import type { HUDTelemetry, RendererMode } from '../types/game';
 export interface PauseOverlayProps {
   hud: HUDTelemetry;
   trackTitle: string;
+  audioOffsetMs: number;
+  onChangeAudioOffset: (nextOffsetMs: number) => void;
   onResume: () => void;
   onReturnToMenu: () => void;
   onSetZoom: (zoom: number) => void;
@@ -32,6 +34,8 @@ function formatZoom(z: number): string {
 export const PauseOverlay: React.FC<PauseOverlayProps> = ({
   hud,
   trackTitle,
+  audioOffsetMs,
+  onChangeAudioOffset,
   onResume,
   onReturnToMenu,
   onSetZoom,
@@ -45,6 +49,7 @@ export const PauseOverlay: React.FC<PauseOverlayProps> = ({
   const currentZoom = hud.userZoom ?? 1.0;
   const progressPct = Math.min(100, Math.max(0, Math.round(hud.progress * 100)));
   const isViewDefault = !hud.isPanned && Math.abs(currentZoom - 1) < 0.01;
+  const offsetText = `${audioOffsetMs > 0 ? '+' : ''}${audioOffsetMs}ms`;
 
   const presets: ReadonlyArray<{ value: number; testId: string; label: string }> = [
     { value: 0.25, testId: 'pause-preset-0.25', label: t.pause.presetWide },
@@ -128,7 +133,49 @@ export const PauseOverlay: React.FC<PauseOverlayProps> = ({
             </button>
           </div>
 
-          {/* Row 3: ThorVG Vector Zoom & Live CPU/GPU Compare */}
+          {/* Row 3: Compact Single-Row Audio Sync Offset Calibration (`[Fix 7]`) */}
+          <div className="pause-audio-offset-row" data-testid="pause-audio-offset">
+            <div className="pause-audio-offset-info">
+              <strong>{t.pause.audioSyncLabel}</strong>
+              <small>{t.pause.audioSyncHint}</small>
+            </div>
+            <div className="pause-audio-offset-controls">
+              <button
+                type="button"
+                data-testid="pause-offset-minus"
+                className="hud-btn pause-offset-step-btn"
+                disabled={audioOffsetMs <= -150}
+                onClick={() => onChangeAudioOffset(audioOffsetMs - 5)}
+              >
+                -5ms
+              </button>
+              <span
+                className={`pause-offset-readout${audioOffsetMs !== 0 ? ' is-adjusted' : ''}`}
+                data-testid="pause-offset-value"
+              >
+                {offsetText}
+              </span>
+              <button
+                type="button"
+                data-testid="pause-offset-plus"
+                className="hud-btn pause-offset-step-btn"
+                disabled={audioOffsetMs >= 150}
+                onClick={() => onChangeAudioOffset(audioOffsetMs + 5)}
+              >
+                +5ms
+              </button>
+              <button
+                type="button"
+                data-testid="pause-offset-reset"
+                className={`hud-btn pause-offset-reset-btn${audioOffsetMs === 0 ? ' is-default' : ''}`}
+                onClick={() => onChangeAudioOffset(0)}
+              >
+                {t.pause.audioSyncReset}
+              </button>
+            </div>
+          </div>
+
+          {/* Row 4: ThorVG Vector Zoom & Live CPU/GPU Compare */}
           <div className="pause-vector-section">
             <div className="pause-vector-header">
               <span className="pause-vector-title">{t.pause.vectorSection}</span>
@@ -207,6 +254,38 @@ export const PauseOverlay: React.FC<PauseOverlayProps> = ({
             </div>
 
             <p className="pause-vector-hint">{t.pause.vectorHint}</p>
+          </div>
+
+          {/* Row 5: 4 Crisp Controls Guide Pills */}
+          <div className="controls-pill-grid compact" data-testid="pause-controls-guide">
+            <div className="control-guide-pill tone-cyan">
+              <div className="control-pill-top">
+                <span className="control-lane-tag">{t.menu.controls.highTag}</span>
+                <strong>{t.menu.controls.highKey}</strong>
+              </div>
+              <small>{t.menu.controls.highDesc}</small>
+            </div>
+            <div className="control-guide-pill tone-crimson">
+              <div className="control-pill-top">
+                <span className="control-lane-tag">{t.menu.controls.lowTag}</span>
+                <strong>{t.menu.controls.lowKey}</strong>
+              </div>
+              <small>{t.menu.controls.lowDesc}</small>
+            </div>
+            <div className="control-guide-pill tone-gold">
+              <div className="control-pill-top">
+                <span className="control-lane-tag">{t.menu.controls.chordTag}</span>
+                <strong>{t.menu.controls.chordKey}</strong>
+              </div>
+              <small>{t.menu.controls.chordDesc}</small>
+            </div>
+            <div className="control-guide-pill tone-neutral">
+              <div className="control-pill-top">
+                <span className="control-lane-tag">{t.menu.controls.utilTag}</span>
+                <strong>{t.menu.controls.utilKey}</strong>
+              </div>
+              <small>{t.menu.controls.utilDesc}</small>
+            </div>
           </div>
         </div>
       )}
