@@ -40,6 +40,9 @@ export const en = {
     rendererGpuDesc: 'ThorVG draws vectors through the WebGL2 shader pipeline for hardware acceleration',
     formSection: '3. Select Crewmate Playstyle (All Styles Have Double Jump)',
     difficultySection: '4. Select Difficulty & Rhythm Speed',
+    skinSection: '5. Crewmate Vector Suit & Trail (0KB Procedural)',
+    skinEquipped: 'EQUIPPED',
+    skinReady: 'UNLOCKED',
     start: '▶ START RUN',
     initializing: '⏳ Initializing ThorVG WASM...',
     controls: {
@@ -135,6 +138,32 @@ export const en = {
       skillDesc: '[Shift] Invulnerable high-speed blink dash pierces & shatters traps (50% CD refund)',
     },
   },
+  skins: {
+    classic: {
+      name: 'Neon Vanguard',
+      badge: 'DEFAULT',
+      unlockReq: 'Default Suit',
+      desc: 'Resonance polygon shield & vector trail',
+    },
+    prism: {
+      name: 'Prism Valkyrie',
+      badge: '3★ PRISM',
+      unlockReq: 'Collect 3★ in 1 Run',
+      desc: 'Bezier Valkyrie wings, tiara & 8-star trail',
+    },
+    flawless: {
+      name: 'Cyber Aegis',
+      badge: 'NO MISS',
+      unlockReq: 'Clear with NO MISS',
+      desc: 'Twin plasma boosters, halo & chevron trail',
+    },
+    grandmaster: {
+      name: 'Solar Emperor',
+      badge: 'S-RANK',
+      unlockReq: 'Clear with S Rank',
+      desc: 'Imperial 5-spire crown, shards & solar crest',
+    },
+  },
   judgments: {
     PERFECT: 'PERFECT!',
     GREAT: 'GREAT!',
@@ -177,6 +206,9 @@ export const en = {
     cinematicAuto: '🎬 AUTO [C]',
     cinematicFixed: '🎬 1x [C]',
     cinematicTitle: 'Toggle Dynamic Vector Cinematic Camera [C]',
+    grooveHp: 'GROOVE HP {hp}%',
+    grooveDangerTag: 'CRITICAL',
+    chillNoFail: '🛡️ CHILL MODE · NO-FAIL GROOVE',
   },
   pause: {
     badge: '⏸ PAUSED · THORVG VECTOR INSPECTOR',
@@ -212,6 +244,8 @@ export const en = {
     slamImpact: '💥 SLAM PAD SHOCKWAVE — SUPER BOUNCE!',
     droneShatter: '⚔️ BEAT DRONE SLICED — DASH & AIR JUMP REFILLED!',
     prismStar: '★ PRISM STAR ({collected}/{total}) — +1,500 BONUS!',
+    grooveDanger: '⚠️ GROOVE CRITICAL — Hit PERFECTs or [E] Overdrive to heal!',
+    grooveDepleted: '💔 GROOVE DEPLETED — Stage Failed!',
   },
   result: {
     badge: 'TRACK COMPLETE · RHYTHM COURSE CLEARED',
@@ -238,6 +272,12 @@ export const en = {
     compareGpu: '🔄 Compare in GPU (GlCanvas) Mode',
     compareCpu: '🔄 Compare in CPU (SwCanvas) Mode',
     backToMenu: '⚙️ Back to Main Menu',
+    failedBadge: 'GROOVE DEPLETED · STAGE FAILED',
+    failedProgress: 'REACHED {pct}% OF TRACK',
+    instantRetry: '↻ Instant Retry [Space]',
+    skinUnlockedTitle: '✨ NEW 0KB VECTOR SKIN UNLOCKED!',
+    equipSkin: 'Equip Now',
+    equippedSkin: '✓ Equipped',
   },
 };
 
@@ -266,6 +306,9 @@ export const ko: Messages = {
     rendererGpuDesc: 'WebGL2 셰이더 파이프라인으로 벡터를 그려 하드웨어 가속을 사용합니다',
     formSection: '3. 플레이 스타일 선택 (전 스타일 기본 2단 점프)',
     difficultySection: '4. 난이도 및 리듬 주행 속도',
+    skinSection: '5. 크루메이트 벡터 슈트 & 궤적 스킨 (0KB 순수 벡터)',
+    skinEquipped: '장착됨',
+    skinReady: '해금됨',
     start: '▶ 게임 시작',
     initializing: '⏳ ThorVG WASM 초기화 중...',
     controls: {
@@ -361,6 +404,32 @@ export const ko: Messages = {
       skillDesc: '[Shift] 초고속 무적 관통 대시로 함정 돌파·파괴 (격파 시 쿨타임 50% 환급)',
     },
   },
+  skins: {
+    classic: {
+      name: '네온 뱅가드',
+      badge: '기본',
+      unlockReq: '기본 지급 슈트',
+      desc: '공명 다각형 실드 & 기본 벡터 트레일',
+    },
+    prism: {
+      name: '프리즘 발키리',
+      badge: '3★ 스타',
+      unlockReq: '단일 런 ★3/3 수집 클리어',
+      desc: '3차 베지어 발키리 날개·티아라 & 8각 스타 궤적',
+    },
+    flawless: {
+      name: '사이버 이지스',
+      badge: '노미스',
+      unlockReq: 'NO MISS 완주 클리어',
+      desc: '트윈 플라즈마 부스터·헤일로 & 쉐브론 궤적',
+    },
+    grandmaster: {
+      name: '솔라 엠퍼러',
+      badge: 'S랭크',
+      unlockReq: 'S 랭크 완주 클리어',
+      desc: '황금 제왕 5첨탑 왕관·공전 샤드 & 솔라 궤적',
+    },
+  },
   judgments: {
     PERFECT: 'PERFECT!',
     GREAT: 'GREAT!',
@@ -403,6 +472,9 @@ export const ko: Messages = {
     cinematicAuto: '🎬 자동 [C]',
     cinematicFixed: '🎬 고정 [C]',
     cinematicTitle: '구간 연동 다이나믹 벡터 시네마틱 카메라 전환 [C]',
+    grooveHp: '그루브 HP {hp}%',
+    grooveDangerTag: '위험',
+    chillNoFail: '🛡️ 힐링 무실패 모드 · 체력 차감 없음',
   },
   pause: {
     badge: '⏸ 일시정지 · THORVG 벡터 맵 뷰어',
@@ -438,6 +510,8 @@ export const ko: Messages = {
     slamImpact: '💥 슬램 패드 대충격파 — 슈퍼 도약!',
     droneShatter: '⚔️ 비트 드론 격파 — 대시 & 공중 점프 즉시 충전!',
     prismStar: '★ 프리즘 스타 ({collected}/{total}) 획득 — +1,500 보너스!',
+    grooveDanger: '⚠️ 그루브 위험! PERFECT 노트·오버드라이브[E]로 회복하세요!',
+    grooveDepleted: '💔 그루브 소진 — 스테이지 실패!',
   },
   result: {
     badge: '트랙 완주 · 리듬 러너 코스 클리어',
@@ -464,6 +538,12 @@ export const ko: Messages = {
     compareGpu: '🔄 GPU (GlCanvas) 모드로 비교 플레이',
     compareCpu: '🔄 CPU (SwCanvas) 모드로 비교 플레이',
     backToMenu: '⚙️ 메인 메뉴로 돌아가기',
+    failedBadge: '그루브 소진 · 스테이지 실패',
+    failedProgress: '곡 진행률 {pct}% 도달',
+    instantRetry: '↻ 즉시 재도전 [Space]',
+    skinUnlockedTitle: '✨ 신규 0KB 벡터 슈트 해금 달성!',
+    equipSkin: '즉시 장착',
+    equippedSkin: '✓ 장착 완료',
   },
 };
 

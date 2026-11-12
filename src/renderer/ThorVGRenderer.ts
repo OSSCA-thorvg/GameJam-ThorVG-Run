@@ -9,14 +9,20 @@ import wasmUrl from '@thorvg/webcanvas/dist/thorvg.wasm?url';
 import splashLottie from '../logo/powred.by.thorvg.1.json?raw';
 import crewmateLottie from '../asset/Loading 50 _ Among Us.json?raw';
 import {
+  CREWMATE_SKIN_CONFIG,
   FORM_CONFIG,
+  type CrewmateSkinId,
   type RendererMode,
   type ResonanceFormType,
   type RenderFrameState,
 } from '../types/game';
 import { buildCharacterMatrix } from './characterMatrix';
 import { renderMacroWorldPass } from './passes/macroWorldPass';
-import { appendPolygonPath, drawPlayerPolygon } from './passes/playerGeometry';
+import {
+  appendSkinAfterimagePath,
+  drawCrewmateSkinOrnaments,
+  drawPlayerPolygon,
+} from './passes/playerGeometry';
 import { renderMenuPreviewPass } from './passes/previewPass';
 import { resetWorldShapeLayers, type TvgShapePool } from './passes/shapePool';
 import { prepareSplashLottie } from './splashLottie';
@@ -191,6 +197,8 @@ export class ThorVGRenderer {
         effects: new TVG.Shape(),
         playerGlow: new TVG.Shape(),
         playerCore: new TVG.Shape(),
+        skinFront: new TVG.Shape(),
+        skinFrontGlow: new TVG.Shape(),
         vfxGold: new TVG.Shape(),
         vfxCyan: new TVG.Shape(),
         vfxCrimson: new TVG.Shape(),
@@ -207,6 +215,7 @@ export class ThorVGRenderer {
       shapes.waveGlow.blend(addBlend);
       shapes.timingRings.blend(addBlend);
       shapes.playerGlow.blend(addBlend);
+      shapes.skinFrontGlow.blend(addBlend);
       shapes.vfxGold.blend(addBlend);
       shapes.vfxCyan.blend(addBlend);
       shapes.vfxCrimson.blend(addBlend);
@@ -233,6 +242,8 @@ export class ThorVGRenderer {
         shapes.effects,
         shapes.playerGlow,
         shapes.playerCore,
+        shapes.skinFront,
+        shapes.skinFrontGlow,
         shapes.vfxGold,
         shapes.vfxCyan,
         shapes.vfxCrimson,
@@ -261,9 +272,11 @@ export class ThorVGRenderer {
         .add(shapes.playerGlow)
         .add(shapes.playerCore);
 
-      // Character draws above its aura and below multi-color additive VFX shards & NonZero blades.
+      // Character draws above its back aura/wings and below front crown/tiara/halo & additive VFX blades.
       this.loadCrewmate(TVG);
       this.canvas
+        .add(shapes.skinFront)
+        .add(shapes.skinFrontGlow)
         .add(shapes.vfxGold)
         .add(shapes.vfxCyan)
         .add(shapes.vfxCrimson)
@@ -374,9 +387,11 @@ export class ThorVGRenderer {
     shapes.bg.reset().appendRect(0, 0, this.width, this.height).fill(0, 0, 0, 255);
     shapes.grid.reset();
     resetWorldShapeLayers(shapes);
-    shapes.effects.reset();
+    shapes.effects.reset().fill(0, 0, 0, 0);
     shapes.playerGlow.reset();
     shapes.playerCore.reset();
+    shapes.skinFront.reset();
+    shapes.skinFrontGlow.reset();
     shapes.vfxGold.reset();
     shapes.vfxCyan.reset();
     shapes.vfxCrimson.reset();
@@ -388,7 +403,7 @@ export class ThorVGRenderer {
   }
 
   /**
-   * Immediately resets all 20 pooled TvgShape layers, hides character/splash pictures,
+   * Immediately resets all pooled TvgShape layers, hides character/splash pictures,
    * fills an opaque #070914 background, and flushes the canvas so zero menu/scene
    * remnants survive across screen transitions.
    */
@@ -398,9 +413,11 @@ export class ThorVGRenderer {
     shapes.bg.reset().appendRect(0, 0, this.width, this.height).fill(7, 9, 20, 255);
     shapes.grid.reset();
     resetWorldShapeLayers(shapes);
-    shapes.effects.reset();
+    shapes.effects.reset().fill(0, 0, 0, 0);
     shapes.playerGlow.reset();
     shapes.playerCore.reset();
+    shapes.skinFront.reset();
+    shapes.skinFrontGlow.reset();
     shapes.vfxGold.reset();
     shapes.vfxCyan.reset();
     shapes.vfxCrimson.reset();
@@ -494,10 +511,13 @@ export class ThorVGRenderer {
   public renderPreviewFrame(
     timeSec: number,
     previewForm: ResonanceFormType = 'synth',
-    previewSpeedPxPerSec: number = 550
+    previewSpeedPxPerSec: number = 550,
+    previewSkin: CrewmateSkinId = 'classic'
   ): void {
     if (!this.canvas || !this.tvg || !this.shapes || this.disposed) return;
 
+    this.shapes.skinFront.reset();
+    this.shapes.skinFrontGlow.reset();
     this.shapes.vfxSlashGold.reset();
     this.shapes.vfxSlashCyan.reset();
     this.shapes.vfxSlashCrimson.reset();
@@ -512,22 +532,59 @@ export class ThorVGRenderer {
       previewSpeedPxPerSec
     );
 
-    if (this.crewAnim) {
-      const heightPx = 24 * CREW_HEIGHT_RATIO;
-      const cy = playerY + 24 - heightPx / 2;
-      drawPlayerPolygon(
-        this.shapes.playerGlow,
-        this.shapes.playerCore,
-        playerX,
-        cy,
-        24,
-        0,
+    const heightPx = 24 * CREW_HEIGHT_RATIO;
+    const cy = this.crewAnim ? playerY + 24 - heightPx / 2 : playerY;
+
+    // 3 semi-transparent trail ghosts behind the preview Crewmate (x = 86, 64, 42 at 1280px -> never clips < 0)
+    const trailOffsets = [22, 44, 66] as const;
+    for (let idx = 0; idx < trailOffsets.length; idx++) {
+      const offset = trailOffsets[idx]!;
+      const gx = playerX - offset;
+      const gy = cy + Math.sin(timeSec * 7.5 - idx * 0.9) * 2.5;
+      const gRadius = 20 * (1 - idx * 0.16);
+      const gRot = previewSkin === 'flawless' ? 0 : timeSec * 1.8 + idx * 0.35;
+      appendSkinAfterimagePath(
+        this.shapes.effects,
+        gx,
+        gy,
+        gRadius,
+        gRot,
         previewForm,
-        1.0,
-        true
+        previewSkin
       );
+    }
+    const [tr, tg, tb] =
+      previewSkin === 'classic'
+        ? FORM_CONFIG[previewForm].rgb
+        : CREWMATE_SKIN_CONFIG[previewSkin].primaryRgb;
+    this.shapes.effects
+      .fill(tr, tg, tb, previewSkin === 'classic' ? 38 : 62)
+      .stroke({
+        width: previewSkin === 'classic' ? 1.8 : 2.2,
+        color: [tr, tg, tb, previewSkin === 'classic' ? 155 : 215],
+      });
+
+    if (this.crewAnim) {
+      drawCrewmateSkinOrnaments({
+        playerGlowShape: this.shapes.playerGlow,
+        playerCoreShape: this.shapes.playerCore,
+        skinFrontShape: this.shapes.skinFront,
+        skinFrontGlowShape: this.shapes.skinFrontGlow,
+        cx: playerX,
+        cy,
+        radius: 24,
+        rotation: 0,
+        form: previewForm,
+        skinId: previewSkin,
+        alphaRatio: 1,
+        combo: previewSkin === 'grandmaster' ? 30 : 1,
+        timeSec,
+        overdriveActive: false,
+      });
       this.drawCrewmate(playerX, cy, heightPx, 0, 1, runCycle, 255);
     } else {
+      this.shapes.skinFront.reset();
+      this.shapes.skinFrontGlow.reset();
       drawPlayerPolygon(
         this.shapes.playerGlow,
         this.shapes.playerCore,
@@ -548,7 +605,7 @@ export class ThorVGRenderer {
 
     const shapes = this.shapes;
     const { width, height, activeForm, frequency } = state;
-    const [fr, fg, fb] = FORM_CONFIG[activeForm].rgb;
+    const activeSkin: CrewmateSkinId = state.skinId ?? 'classic';
 
     const zoom = Math.max(0.05, state.zoomScale);
     const fx = state.focalScreenX;
@@ -606,6 +663,8 @@ export class ThorVGRenderer {
 
     // 3. Afterimage Trails, Speed Lines (`effects`) & 3-Color Additive Shockwaves + Diamond Shards (`vfx*`)
     shapes.effects.reset();
+    shapes.skinFront.reset();
+    shapes.skinFrontGlow.reset();
     shapes.vfxGold.reset();
     shapes.vfxCyan.reset();
     shapes.vfxCrimson.reset();
@@ -641,14 +700,16 @@ export class ThorVGRenderer {
       target.appendCircle(tx(sw.x), ty(sw.y), rInner, rInner);
     }
 
-    for (const ai of state.afterimages) {
-      appendPolygonPath(
+    const pr = ts(state.playerRadius);
+    for (const tr of state.afterimages) {
+      appendSkinAfterimagePath(
         shapes.effects,
-        tx(ai.x),
-        ty(ai.y),
-        ts(state.playerRadius * 0.85),
-        ai.rotation,
-        ai.form
+        tx(tr.x),
+        ty(tr.y),
+        pr * 0.9,
+        tr.rotation,
+        tr.form,
+        activeSkin
       );
       hasEffects = true;
     }
@@ -674,40 +735,51 @@ export class ThorVGRenderer {
       }
     }
     if (hasEffects) {
-      shapes.effects.stroke({
-        width: isOverdrive ? 3.0 : 2.4,
-        color: isOverdrive ? [255, 232, 95, 210] : [fr, fg, fb, 185],
-      });
+      const [er, eg, eb] = isOverdrive
+        ? [255, 232, 95]
+        : activeSkin === 'classic'
+          ? FORM_CONFIG[state.activeForm].rgb
+          : CREWMATE_SKIN_CONFIG[activeSkin].primaryRgb;
+      shapes.effects
+        .fill(er, eg, eb, activeSkin === 'classic' ? 0 : 48)
+        .stroke({
+          width: isOverdrive ? 3.0 : 2.4,
+          color: [er, eg, eb, isOverdrive ? 210 : 195],
+        });
     }
 
-    // 4. Player Character (Crewmate Lottie + Resonance Aura & Sacred Combo Halo, or Form Polygon fallback)
+    // 4. Player Character (Crewmate Lottie + Procedural Vector Suit Ornaments, or Form Polygon fallback)
     const isInvulnerable = state.invulnerableTimer > 0 && !isOverdrive;
+    const blink = isInvulnerable && Math.floor(state.timeSec * 12) % 2 === 0;
+    const alphaRatio = blink ? 0.35 : isInvulnerable ? 0.65 : 1.0;
     const px = tx(state.playerScreenX);
     const py = ty(state.playerScreenY);
-    const pr = ts(state.playerRadius);
     const combo = state.combo ?? 1;
     if (this.crewAnim) {
       const heightPx = pr * CREW_HEIGHT_RATIO;
       const cx = px;
       const rotation = state.playerRotation;
       const cy = py + pr - heightPx / 2;
-      drawPlayerPolygon(
-        shapes.playerGlow,
-        shapes.playerCore,
+      drawCrewmateSkinOrnaments({
+        playerGlowShape: shapes.playerGlow,
+        playerCoreShape: shapes.playerCore,
+        skinFrontShape: shapes.skinFront,
+        skinFrontGlowShape: shapes.skinFrontGlow,
         cx,
         cy,
-        pr,
+        radius: pr,
         rotation,
-        activeForm,
-        isInvulnerable ? 0.55 : 1.0,
-        true,
+        form: activeForm,
+        skinId: activeSkin,
+        alphaRatio,
         combo,
-        state.timeSec,
-        isOverdrive
-      );
-      const blink = isInvulnerable && Math.floor(state.timeSec * 12) % 2 === 0;
+        timeSec: state.timeSec,
+        overdriveActive: isOverdrive,
+      });
       this.drawCrewmate(cx, cy, heightPx, rotation, 1, state.runCycleTime, blink ? 90 : 255);
     } else {
+      shapes.skinFront.reset();
+      shapes.skinFrontGlow.reset();
       drawPlayerPolygon(
         shapes.playerGlow,
         shapes.playerCore,
@@ -716,7 +788,7 @@ export class ThorVGRenderer {
         pr,
         state.playerRotation,
         activeForm,
-        isInvulnerable ? 0.55 : 1.0,
+        alphaRatio,
         false,
         combo,
         state.timeSec,

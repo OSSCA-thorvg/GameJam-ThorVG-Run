@@ -205,4 +205,21 @@ export class SfxSynth {
     this.scheduleTone(145, 52, 0.17, 0.18, 'sawtooth');
     this.scheduleNoiseSnap(650, 'lowpass', 0.12, 0.14);
   }
+
+  public playStageFail(): void {
+    if (this.mode === 'off') return;
+    this.scheduleTone(340, 48, 0.42, 0.16, 'sawtooth');
+    this.scheduleTone(220, 36, 0.46, 0.14, 'triangle', 0.03);
+    this.scheduleNoiseSnap(420, 'lowpass', 0.22, 0.14);
+  }
+
+  public playSkinUnlock(): void {
+    if (this.mode === 'off') return;
+    const notes = [523.25, 659.25, 783.99, 1046.5, 1318.5];
+    for (let i = 0; i < notes.length; i++) {
+      const f = notes[i]!;
+      this.scheduleTone(f, f * 1.01, 0.22, 0.11, 'triangle', i * 0.065);
+      this.scheduleTone(f * 2, f * 2, 0.16, 0.05, 'sine', i * 0.065 + 0.015);
+    }
+  }
 }

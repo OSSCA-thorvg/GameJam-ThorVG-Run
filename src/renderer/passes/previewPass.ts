@@ -26,6 +26,11 @@ export function renderMenuPreviewPass(
   const formCfg = FORM_CONFIG[previewForm];
   const [r, g, b] = formCfg.rgb;
 
+  // Unobstructed left-gutter preview anchor (at 1280x720: cardWidth=880, leftGutter=200 -> playerX=108px)
+  const cardWidth = Math.min(width - 40, 880);
+  const leftGutter = Math.max(0, (width - cardWidth) * 0.5);
+  const playerX = leftGutter >= 140 ? Math.min(width * 0.24, leftGutter * 0.54) : width * 0.24;
+
   // 1. Deep cyber background
   shapes.bg.reset().appendRect(0, 0, width, height).fill(9, 11, 22, 255);
 
@@ -98,8 +103,8 @@ export function renderMenuPreviewPass(
       bandShape.appendCircle(orbX, orbY, 9, 9);
       hasBand[tileBand] = true;
 
-      if (orbX > width * 0.24 && orbX < width * 0.85) {
-        const shrinkRatio = Math.max(0, Math.min(1, (orbX - width * 0.24) / (width * 0.55)));
+      if (orbX > playerX && orbX < width * 0.85) {
+        const shrinkRatio = Math.max(0, Math.min(1, (orbX - playerX) / (width * 0.55)));
         const ringR = 9 * (1.15 + shrinkRatio * 1.85);
         shapes.timingRings.appendCircle(orbX, orbY, ringR, ringR);
         hasRings = true;
@@ -151,7 +156,6 @@ export function renderMenuPreviewPass(
     shapes.timingRings.stroke({ width: 2, color: [255, 238, 120, 205] });
   }
 
-  const playerX = width * 0.24;
   const playerTile = Math.floor((scrollPx + playerX) / tileW);
   const playerMod = ((playerTile % 7) + 7) % 7;
   const hopOffset = playerMod === 5 ? -135 : playerMod === 2 || playerMod === 3 ? -36 : 0;

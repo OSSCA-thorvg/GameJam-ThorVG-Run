@@ -5,6 +5,7 @@ import {
   DIFFICULTY_CONFIG,
   FORM_CONFIG,
   type BannerMessage,
+  type CrewmateSkinId,
   type DifficultyMode,
   type FrequencyBands,
   type HUDTelemetry,
@@ -20,7 +21,7 @@ import {
 } from '../types/game';
 import { BezierTerrain } from './BezierTerrain';
 import { PlayerController } from './PlayerController';
-import { nextSfxMode, saveTrackRunResult } from './recordsStore';
+import { evaluateSkinUnlocksOnClear, nextSfxMode, saveTrackRunResult } from './recordsStore';
 import { ScoreJudgeSystem } from './systems/ScoreJudgeSystem';
 import { VfxPoolSystem } from './systems/VfxPoolSystem';
 
@@ -101,12 +102,18 @@ export class GameEngine {
   private shakeDuration: number = 0.2;
   private shakeIntensity: number = 0;
 
-  // Crewmate Playstyle & Resonance Overdrive State
+  // Crewmate Playstyle, Vector Skin, Groove Survival HP & Resonance Overdrive State
   private playstyle: ResonanceFormType = 'synth';
   private activeForm: ResonanceFormType = 'synth';
+  private selectedSkin: CrewmateSkinId = 'classic';
   private resonanceGauge: number = 35;
   private overdriveTimer: number = 0;
   private overdriveNotifiedReady: boolean = false;
+  private grooveHp: number = 100;
+  private readonly maxGrooveHp: number = 100;
+  private grooveDamageCooldown: number = 0;
+  private isFailed: boolean = false;
+  private newlyUnlockedSkins: CrewmateSkinId[] = [];
 
   // Status Banner State
   private statusBanner: BannerMessage | null = null;
@@ -192,6 +199,18 @@ export class GameEngine {
     return this.playstyle;
   }
 
+  public setSelectedSkin(skinId: CrewmateSkinId): void {
+    if (this.selectedSkin === skinId) return;
+    this.selectedSkin = skinId;
+    if (this.paused) {
+      this.refreshPausedView(false);
+    }
+  }
+
+  public getSelectedSkin(): CrewmateSkinId {
+    return this.selectedSkin;
+  }
+
   public setSfxMode(mode: SfxMode): void {
     this.audio.setSfxMode(mode);
     this.hudDirty = true;
@@ -258,6 +277,7 @@ export class GameEngine {
     this.jumpsRemaining = this.playerController.profile.maxJumps;
     this.surfMomentum = 1.0;
     this.beatPulse = 1.0;
+    this.healGrooveHp(this.difficulty === 'hard' ? 24 : 28);
     this.hudDirty = true;
 
     const sx = this.getPlayerScreenX();
@@ -825,6 +845,10 @@ export class GameEngine {
     this.resonanceGauge = 40;
     this.overdriveTimer = 0;
     this.overdriveNotifiedReady = false;
+    this.grooveHp = this.maxGrooveHp;
+    this.grooveDamageCooldown = 0;
+    this.isFailed = false;
+    this.newlyUnlockedSkins = [];
 
     this.scoreJudge.reset();
     this.vfx.reset();
@@ -858,6 +882,63 @@ export class GameEngine {
     }
   }
 
+  private applyGrooveDamage(baseNormalDmg: number, baseHardDmg: number): void {
+    if (
+      this.difficulty === 'easy' ||
+      this.isFailed ||
+      this.overdriveTimer > 0 ||
+      this.grooveDamageCooldown > 0
+    ) {
+      return;
+    }
+    const dmg = this.difficulty === 'hard' ? baseHardDmg : baseNormalDmg;
+    const prevHp = this.grooveHp;
+    this.grooveHp = Math.max(0, this.grooveHp - dmg);
+    this.grooveDamageCooldown = 1.05;
+    this.hudDirty = true;
+    if (this.grooveHp > 0 && this.grooveHp <= 30 && prevHp > 30) {
+      this.setBanner({ key: 'grooveDanger' }, 1.8);
+    }
+  }
+
+  private healGrooveHp(amount: number): void {
+    if (this.difficulty === 'easy' || this.isFailed || this.grooveHp >= this.maxGrooveHp) {
+      return;
+    }
+    const prevRounded = Math.round(this.grooveHp);
+    this.grooveHp = Math.min(this.maxGrooveHp, this.grooveHp + amount);
+    if (Math.round(this.grooveHp) !== prevRounded) {
+      this.hudDirty = true;
+    }
+  }
+
+  private triggerStageFail(
+    playerScreenX: number,
+    audioSec: number,
+    freq: FrequencyBands,
+    speedMultiplier: number
+  ): void {
+    const failProgress = this.audio.getProgress();
+    this.isFailed = true;
+    this.finishRecorded = true;
+    this.running = false;
+    this.paused = false;
+    this.isJumpHeld = false;
+    this.isDiveHeld = false;
+    this.hitstopTimer = 0;
+    this.audio.stop();
+    this.audio.sfx.playStageFail();
+    const renderPy = this.getRenderPlayerY();
+    this.vfx.spawnShockwave(playerScreenX, renderPy, 20, 190, [255, 42, 109], 1.0);
+    this.vfx.spawnBurst(playerScreenX, renderPy, [255, 42, 109], 22);
+    this.setBanner({ key: 'grooveDepleted' }, 3.0);
+    this.hudDirty = false;
+    this.hudPublishAccum = 0;
+    this.scoreJudge.consumeDirty();
+    this.renderCurrentState(audioSec, freq);
+    this.publishHud(failProgress, speedMultiplier, true);
+  }
+
   private getActiveScoreMultiplier(): number {
     const overdriveMult = this.overdriveTimer > 0 ? 2.0 : 1.0;
     const dropMult = this.currentSectionIntensity === 'drop' ? 1.25 : 1.0;
@@ -887,12 +968,16 @@ export class GameEngine {
       this.beatPulse = 1.0;
       this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.1);
       if (!suppressGaugeGain) this.addResonanceGauge(5.5 * gaugeMult);
+      this.healGrooveHp(
+        (this.difficulty === 'hard' ? 1.8 : 2.4) * (this.scoreJudge.combo >= 25 ? 1.5 : 1.0)
+      );
       this.vfx.spawnShockwave(screenX, screenY, 14, 92, [255, 230, 0], 0.95);
       this.vfx.spawnBurst(screenX, screenY, [255, 230, 0], 12);
     } else if (grade === 'GREAT') {
       this.beatPulse = Math.max(this.beatPulse, 0.55);
       this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.06);
       if (!suppressGaugeGain) this.addResonanceGauge(3.5 * gaugeMult);
+      this.healGrooveHp(this.difficulty === 'hard' ? 0.6 : 0.9);
       this.vfx.spawnBurst(screenX, screenY, [5, 213, 255], 8);
     } else if (grade === 'GOOD') {
       if (!suppressGaugeGain) this.addResonanceGauge(1.8 * gaugeMult);
@@ -913,6 +998,7 @@ export class GameEngine {
     if (orb.isPrismStar) {
       this.scoreJudge.recordStarCollected();
       this.addResonanceGauge(20);
+      this.healGrooveHp(this.difficulty === 'hard' ? 15 : 18);
       this.audio.sfx.playPrismStar();
       this.triggerScreenShake(0.22, 6.5);
       this.vfx.spawnShockwave(playerScreenX, oy, 18, 165, [255, 230, 0], 1.0);
@@ -1147,10 +1233,16 @@ export class GameEngine {
     if (this.invulnerableTimer > 0) {
       this.invulnerableTimer = Math.max(0, this.invulnerableTimer - dt);
     }
+    if (this.grooveDamageCooldown > 0) {
+      this.grooveDamageCooldown = Math.max(0, this.grooveDamageCooldown - dt);
+    }
     if (this.shakeTimer > 0) {
       this.shakeTimer = Math.max(0, this.shakeTimer - dt);
     }
     if (this.overdriveTimer > 0) {
+      if (!this.paused) {
+        this.healGrooveHp((this.difficulty === 'hard' ? 3.0 : 4.0) * dt);
+      }
       this.overdriveTimer = Math.max(0, this.overdriveTimer - dt);
       this.resonanceGauge = (this.overdriveTimer / OVERDRIVE_DURATION_SEC) * 100;
       if (this.overdriveTimer === 0) {
@@ -1240,6 +1332,11 @@ export class GameEngine {
     }
     this.prevRenderCameraX = this.getRenderCameraX();
 
+    if (!this.isFailed && this.difficulty !== 'easy' && this.grooveHp <= 0) {
+      this.triggerStageFail(playerScreenX, audioSec, freq, speedMultiplier);
+      return;
+    }
+
     this.renderCurrentState(audioSec, freq);
 
     const progress = this.audio.getProgress();
@@ -1247,17 +1344,27 @@ export class GameEngine {
       !this.paused && (progress >= 0.995 || (!this.audio.playing && this.elapsedSec > 2.0));
     if (isFinished) {
       this.running = false;
-      if (!this.finishRecorded) {
+      if (!this.finishRecorded && !this.isFailed) {
         this.finishRecorded = true;
+        const { accuracy, rank } = this.scoreJudge.computeAccuracyAndRank();
+        const judgmentCounts = this.scoreJudge.snapshotCounts();
+        const newly = evaluateSkinUnlocksOnClear({
+          rank,
+          starsCollected: this.scoreJudge.starsCollected,
+          noMiss: judgmentCounts.miss === 0,
+        });
+        this.newlyUnlockedSkins = newly;
+        if (newly.length > 0) {
+          this.audio.sfx.playSkinUnlock();
+        }
         if (this.currentTrackMeta) {
-          const { accuracy, rank } = this.scoreJudge.computeAccuracyAndRank();
           const saved = saveTrackRunResult(this.currentTrackMeta, this.difficulty, {
             score: Math.floor(this.scoreJudge.score),
             rank,
             accuracy,
             maxCombo: this.scoreJudge.maxCombo,
             starsCollected: this.scoreJudge.starsCollected,
-            judgmentCounts: this.scoreJudge.snapshotCounts(),
+            judgmentCounts,
           });
           this.lastIsNewRecord = saved.isNewRecord;
           this.lastScoreDelta = saved.scoreDelta;
@@ -1315,6 +1422,7 @@ export class GameEngine {
       panX: this.panX,
       panY: this.panY,
       activeForm: this.activeForm,
+      skinId: this.selectedSkin,
       resonanceGauge: this.resonanceGauge,
       frequency: freq,
       segments: this.terrain.getSegments(),
@@ -1373,6 +1481,10 @@ export class GameEngine {
       progress,
       activeForm: this.activeForm,
       resonanceGauge: Math.min(100, Math.max(0, Math.round(this.resonanceGauge))),
+      grooveHp: Math.round(this.grooveHp),
+      maxGrooveHp: this.maxGrooveHp,
+      isFailed: this.isFailed,
+      newlyUnlockedSkins: this.newlyUnlockedSkins,
       overdriveReady: this.overdriveTimer <= 0 && this.resonanceGauge >= 100,
       overdriveActive: this.overdriveTimer > 0,
       skillCooldownRatio,
@@ -1579,6 +1691,7 @@ export class GameEngine {
           this.triggerScreenShake(0.26, 8.0);
           this.emitJudgment('MISS', playerScreenX, floorY);
           this.setBanner({ key: 'gapFall' }, 1.25);
+          this.applyGrooveDamage(24, 32);
           this.vfx.spawnBurst(playerScreenX, floorY, [255, 50, 95], 18);
         }
       }
@@ -1813,6 +1926,7 @@ export class GameEngine {
             this.triggerScreenShake(0.24, 7.5);
             this.emitJudgment('MISS', playerScreenX, droneY);
             this.setBanner({ key: 'trapHit' }, 1.2);
+            this.applyGrooveDamage(22, 28);
             this.vfx.spawnBurst(playerScreenX, droneY, [255, 50, 95], 16);
           }
         }
@@ -1873,6 +1987,7 @@ export class GameEngine {
             this.triggerScreenShake(0.25, 8.0);
             this.emitJudgment('MISS', playerScreenX, this.playerY);
             this.setBanner({ key: 'trapHit' }, 1.2);
+            this.applyGrooveDamage(22, 28);
             this.vfx.spawnBurst(playerScreenX, this.playerY, [255, 50, 95], 16);
           }
         }

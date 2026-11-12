@@ -24,6 +24,8 @@ export interface TvgShapePool {
   effects: TvgShape;
   playerGlow: TvgShape;
   playerCore: TvgShape;
+  skinFront: TvgShape;
+  skinFrontGlow: TvgShape;
   vfxGold: TvgShape;
   vfxCyan: TvgShape;
   vfxCrimson: TvgShape;

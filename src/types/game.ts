@@ -4,6 +4,45 @@ export type RendererMode = 'sw' | 'gl';
 
 export type ResonanceFormType = 'bass' | 'synth' | 'treble';
 
+export type CrewmateSkinId = 'classic' | 'prism' | 'flawless' | 'grandmaster';
+
+export const CREWMATE_SKIN_ORDER: readonly CrewmateSkinId[] = [
+  'classic',
+  'prism',
+  'flawless',
+  'grandmaster',
+];
+
+export const CREWMATE_SKIN_CONFIG: Record<
+  CrewmateSkinId,
+  {
+    accentHex: string;
+    primaryRgb: [number, number, number];
+    secondaryRgb: [number, number, number];
+  }
+> = {
+  classic: {
+    accentHex: '#05D5FF',
+    primaryRgb: [5, 213, 255],
+    secondaryRgb: [255, 255, 255],
+  },
+  prism: {
+    accentHex: '#38BDF8',
+    primaryRgb: [56, 189, 248],
+    secondaryRgb: [255, 230, 0],
+  },
+  flawless: {
+    accentHex: '#34D399',
+    primaryRgb: [52, 211, 153],
+    secondaryRgb: [5, 213, 255],
+  },
+  grandmaster: {
+    accentHex: '#FFE600',
+    primaryRgb: [255, 230, 0],
+    secondaryRgb: [255, 42, 109],
+  },
+};
+
 export type DifficultyMode = 'easy' | 'normal' | 'hard';
 
 /**
@@ -309,6 +348,7 @@ export interface RenderFrameState {
   panX?: number; // Unzoomed world/screen horizontal pan offset (px, default 0)
   panY?: number; // Unzoomed world/screen vertical pan offset (px, default 0)
   activeForm: ResonanceFormType;
+  skinId?: CrewmateSkinId;
   resonanceGauge: number;     // 0 ~ 100
   frequency: FrequencyBands;
   segments: BezierSegment[];
@@ -349,6 +389,10 @@ export interface HUDTelemetry {
   progress: number; // 0.0 ~ 1.0
   activeForm: ResonanceFormType;
   resonanceGauge: number; // 0 ~ 100
+  grooveHp: number;
+  maxGrooveHp: number;
+  isFailed?: boolean;
+  newlyUnlockedSkins?: CrewmateSkinId[];
   overdriveReady?: boolean;
   overdriveActive?: boolean;
   /** 0 = [Shift] skill ready, 0 < ratio <= 1 = remaining cooldown fraction */

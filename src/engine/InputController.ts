@@ -11,6 +11,7 @@ export interface GameInputCommands {
   onToggleCinematicCamera?: () => void;
   onTogglePause: () => void;
   onExitToMenu: () => void;
+  onReplayRun?: () => void;
   onWheelZoom: (factor: number, canvasX: number, canvasY: number) => void;
   onStepZoom: (factor: number) => void;
   onResetZoom: () => void;
@@ -66,7 +67,21 @@ export class InputController {
         return;
       }
 
-      if (this.commands.isRunFinished()) return;
+      if (this.commands.isRunFinished()) {
+        if (
+          (e.code === 'Space' || e.code === 'Enter') &&
+          !e.repeat &&
+          !e.ctrlKey &&
+          !e.metaKey &&
+          !e.altKey
+        ) {
+          if (!(document.activeElement instanceof HTMLButtonElement)) {
+            e.preventDefault();
+            this.commands.onReplayRun?.();
+          }
+        }
+        return;
+      }
 
       if (!e.ctrlKey && !e.metaKey && !e.altKey) {
         if (e.code === 'Equal' || e.code === 'NumpadAdd') {

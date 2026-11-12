@@ -93,6 +93,12 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
   const userZoom = hud.userZoom ?? 1.0;
   const userZoomText = userZoom < 1 ? userZoom.toFixed(2) : userZoom.toFixed(1);
   const isZoomDefault = !hud.isPanned && Math.abs(userZoom - 1) < 0.01;
+  const hpPct = Math.min(
+    100,
+    Math.max(0, Math.round(((hud.grooveHp ?? 100) / Math.max(1, hud.maxGrooveHp ?? 100)) * 100))
+  );
+  const isDanger = hpPct <= 30;
+  const hpTierClass = hpPct > 65 ? 'hp-high' : hpPct > 30 ? 'hp-mid' : 'hp-danger';
 
   return (
     <div className="hud-overlay">
@@ -254,14 +260,19 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
         <div
           className="hud-center-banner"
           style={{
-            borderColor: hud.overdriveActive ? '#FFE600' : formCfg.colorHex,
+            borderColor:
+              hud.statusBanner.key === 'grooveDanger' || hud.statusBanner.key === 'grooveDepleted'
+                ? '#FF2A6D'
+                : hud.overdriveActive
+                  ? '#FFE600'
+                  : formCfg.colorHex,
           }}
         >
           {resolveBanner(t, hud.statusBanner)}
         </div>
       )}
 
-      {/* Bottom-center: Manual Overdrive button, active playstyle + [Shift] skill status, and Resonance Overdrive bar */}
+      {/* Bottom-center: Manual Overdrive button, Groove HP / Chill status, active playstyle + [Shift] skill status, and Resonance Overdrive bar */}
       <div className="hud-bottom-center" data-ui-panel="true">
         {hud.overdriveReady && (
           <button
@@ -272,6 +283,28 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
           >
             {t.hud.overdriveReadyBtn}
           </button>
+        )}
+
+        {diffMode === 'easy' ? (
+          <div className="groove-hp-row chill" data-testid="hud-chill-pill">
+            <span>{t.hud.chillNoFail}</span>
+          </div>
+        ) : (
+          <div
+            className={`groove-hp-row${isDanger ? ' danger' : ''}`}
+            data-testid="hud-groove-hp"
+          >
+            <div className="groove-hp-header">
+              <strong>{format(t.hud.grooveHp, { hp: hpPct })}</strong>
+              {isDanger && <span className="groove-danger-tag">{t.hud.grooveDangerTag}</span>}
+            </div>
+            <div className="groove-hp-bar-bg">
+              <div
+                className={`groove-hp-bar-fill ${hpTierClass}`}
+                style={{ width: `${hpPct}%` }}
+              />
+            </div>
+          </div>
         )}
 
         <div className="gauge-wrapper">

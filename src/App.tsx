@@ -9,11 +9,13 @@ import { StartScreen } from './components/StartScreen';
 import { TrackLoadingModal } from './components/TrackLoadingModal';
 import { GameEngine } from './engine/GameEngine';
 import { InputController } from './engine/InputController';
+import { getUnlockedSkins, loadSelectedSkin, saveSelectedSkin } from './engine/recordsStore';
 import { trackTitle } from './i18n/display';
 import { useI18n } from './i18n/I18nProvider';
 import { ThorVGRenderer } from './renderer/ThorVGRenderer';
 import {
   DIFFICULTY_CONFIG,
+  type CrewmateSkinId,
   type DifficultyMode,
   type HUDTelemetry,
   type LoadingProgress,
@@ -62,12 +64,16 @@ const INITIAL_HUD: HUDTelemetry = {
   progress: 0,
   activeForm: 'synth',
   resonanceGauge: 40,
+  grooveHp: 100,
+  maxGrooveHp: 100,
   skillCooldownRatio: 0,
   skillCooldownSec: 0,
   overdriveReady: false,
   overdriveActive: false,
   statusBanner: null,
   isFinished: false,
+  isFailed: false,
+  newlyUnlockedSkins: [],
   trapsDestroyed: 0,
   surfMomentum: 0.25,
   speedMultiplier: 1.0,
@@ -95,6 +101,8 @@ export const App: React.FC = () => {
   const [playstyle, setPlaystyle] = useState<ResonanceFormType>(() => loadInitialPlaystyle());
   const [cinematicCamera, setCinematicCamera] = useState<boolean>(() => loadInitialCinematic());
   const [difficulty, setDifficulty] = useState<DifficultyMode>('normal');
+  const [unlockedSkins, setUnlockedSkins] = useState<CrewmateSkinId[]>(() => getUnlockedSkins());
+  const [selectedSkin, setSelectedSkin] = useState<CrewmateSkinId>(() => loadSelectedSkin());
   const [engineReady, setEngineReady] = useState<boolean>(false);
   /** Increments each time a renderer finishes init, so loops can restart on the new instance. */
   const [rendererEpoch, setRendererEpoch] = useState<number>(0);
@@ -124,6 +132,9 @@ export const App: React.FC = () => {
   cinematicCameraRef.current = cinematicCamera;
   const difficultyRef = useRef<DifficultyMode>(difficulty);
   difficultyRef.current = difficulty;
+  const selectedSkinRef = useRef<CrewmateSkinId>(selectedSkin);
+  selectedSkinRef.current = selectedSkin;
+  const finishedAtRef = useRef<number>(0);
   const inGameRef = useRef<boolean>(inGame);
   inGameRef.current = inGame;
   const isFinishedRef = useRef<boolean>(hud.isFinished);
@@ -138,10 +149,18 @@ export const App: React.FC = () => {
   }
   if (!gameEngineRef.current) {
     const engine = new GameEngine(audioRef.current, (nextHud) => {
+      if (nextHud.isFinished) {
+        if (finishedAtRef.current === 0) {
+          finishedAtRef.current = performance.now();
+        }
+      } else {
+        finishedAtRef.current = 0;
+      }
       setHud(nextHud);
     });
     engine.setPlaystyle(playstyle);
     engine.setCinematicCamera(cinematicCameraRef.current);
+    engine.setSelectedSkin(selectedSkinRef.current);
     gameEngineRef.current = engine;
   }
 
@@ -153,6 +172,22 @@ export const App: React.FC = () => {
     cinematicCameraRef.current = cinematicCamera;
     gameEngineRef.current?.setCinematicCamera(cinematicCamera);
   }, [cinematicCamera]);
+
+  useEffect(() => {
+    selectedSkinRef.current = selectedSkin;
+    gameEngineRef.current?.setSelectedSkin(selectedSkin);
+  }, [selectedSkin]);
+
+  useEffect(() => {
+    if (hud.isFinished) {
+      if (finishedAtRef.current === 0) {
+        finishedAtRef.current = performance.now();
+      }
+      setUnlockedSkins(getUnlockedSkins());
+    } else {
+      finishedAtRef.current = 0;
+    }
+  }, [hud.isFinished, hud.newlyUnlockedSkins]);
 
   // Create the ThorVG renderer ('sw' SwCanvas or 'gl' GlCanvas) on a fresh
   // <canvas key={rendererMode} />. Re-created ONLY when the renderer backend changes.
@@ -173,6 +208,7 @@ export const App: React.FC = () => {
         const h = window.innerHeight;
         renderer.resize(w, h);
         gameEngineRef.current?.setCinematicCamera(cinematicCameraRef.current);
+        gameEngineRef.current?.setSelectedSkin(selectedSkinRef.current);
         gameEngineRef.current?.attachRenderer(renderer, rendererMode, w, h);
         setEngineReady(true);
         setRendererEpoch((n) => n + 1);
@@ -214,7 +250,12 @@ export const App: React.FC = () => {
     const start = performance.now();
     const tick = (now: number) => {
       const speedPx = DIFFICULTY_CONFIG[difficultyRef.current].worldPxPerSec;
-      renderer.renderPreviewFrame((now - start) / 1000, playstyleRef.current, speedPx);
+      renderer.renderPreviewFrame(
+        (now - start) / 1000,
+        playstyleRef.current,
+        speedPx,
+        selectedSkinRef.current
+      );
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
@@ -235,8 +276,10 @@ export const App: React.FC = () => {
 
   const handleReturnToMenu = useCallback(() => {
     launchSeqRef.current++;
+    finishedAtRef.current = 0;
     gameEngineRef.current?.stopRun();
     rendererRef.current?.clearForTransition();
+    setUnlockedSkins(getUnlockedSkins());
     setHud((prev) => ({ ...prev, isPaused: false, userZoom: 1.0, isPanned: false }));
     setScreen('menu');
   }, []);
@@ -281,44 +324,6 @@ export const App: React.FC = () => {
     setHud((prev) => ({ ...prev, cinematicCamera: next }));
   }, []);
 
-  // Command-Pattern InputController binding keyboard & pointer controls once
-  useEffect(() => {
-    const controller = new InputController({
-      isGameActive: () => inGameRef.current,
-      isPaused: () => Boolean(gameEngineRef.current?.isPaused),
-      isRunFinished: () => isFinishedRef.current,
-      onPrimaryPress: () => gameEngineRef.current?.handlePrimaryAction(),
-      onPrimaryRelease: () => gameEngineRef.current?.setJumpHeld(false),
-      onDiveHoldChange: (held) => gameEngineRef.current?.setDiveHeld(held),
-      onSecondaryPress: () => gameEngineRef.current?.handleSecondaryAction(),
-      onActivateOverdrive: () => {
-        gameEngineRef.current?.activateOverdrive();
-      },
-      onCycleSfxMode: () => {
-        const next = gameEngineRef.current?.cycleSfxMode();
-        if (next) {
-          setHud((prev) => ({ ...prev, sfxMode: next }));
-        }
-      },
-      onToggleCinematicCamera: handleToggleCinematicCamera,
-      onTogglePause: handleTogglePause,
-      onExitToMenu: handleReturnToMenu,
-      onWheelZoom: (factor, canvasX, canvasY) => {
-        gameEngineRef.current?.zoomByFactor(factor, canvasX, canvasY);
-      },
-      onStepZoom: (factor) => {
-        gameEngineRef.current?.zoomByFactor(factor);
-      },
-      onResetZoom: () => {
-        gameEngineRef.current?.resetCameraView();
-      },
-      onPanDelta: (dx, dy) => {
-        gameEngineRef.current?.panCamera(dx, dy);
-      },
-    });
-    return controller.attach(shellRef.current);
-  }, [handleReturnToMenu, handleToggleCinematicCamera, handleTogglePause]);
-
   const handleUploadFile = useCallback(
     async (file: File, supportedFormats: readonly AudioFormat[]) => {
       if (!audioRef.current) return;
@@ -346,17 +351,31 @@ export const App: React.FC = () => {
     gameEngineRef.current?.setDifficulty(nextDiff);
   }, []);
 
+  const handleSelectSkin = useCallback((skinId: CrewmateSkinId) => {
+    const saved = saveSelectedSkin(skinId);
+    selectedSkinRef.current = saved;
+    setSelectedSkin(saved);
+    setUnlockedSkins(getUnlockedSkins());
+    gameEngineRef.current?.setSelectedSkin(saved);
+  }, []);
+
   const handleStartRun = useCallback(() => {
     const engine = gameEngineRef.current;
     if (!engine) return;
 
     audioRef.current?.unlockFromGesture();
     const seq = ++launchSeqRef.current;
+    finishedAtRef.current = 0;
     rendererRef.current?.clearForTransition();
     engine.setPlaystyle(playstyle);
     engine.setCinematicCamera(cinematicCamera);
+    engine.setSelectedSkin(selectedSkinRef.current);
     setHud((prev) => ({
       ...INITIAL_HUD,
+      grooveHp: 100,
+      maxGrooveHp: 100,
+      isFailed: false,
+      newlyUnlockedSkins: [],
       rendererMode,
       difficulty,
       sfxMode: gameEngineRef.current?.getSfxMode() ?? prev.sfxMode ?? 'full',
@@ -397,6 +416,53 @@ export const App: React.FC = () => {
     })();
   }, [cinematicCamera, difficulty, playstyle, rendererMode, selectedTrack]);
 
+  const handleStartRunRef = useRef(handleStartRun);
+  handleStartRunRef.current = handleStartRun;
+
+  // Command-Pattern InputController binding keyboard & pointer controls once
+  useEffect(() => {
+    const controller = new InputController({
+      isGameActive: () => inGameRef.current,
+      isPaused: () => Boolean(gameEngineRef.current?.isPaused),
+      isRunFinished: () => isFinishedRef.current,
+      onPrimaryPress: () => gameEngineRef.current?.handlePrimaryAction(),
+      onPrimaryRelease: () => gameEngineRef.current?.setJumpHeld(false),
+      onDiveHoldChange: (held) => gameEngineRef.current?.setDiveHeld(held),
+      onSecondaryPress: () => gameEngineRef.current?.handleSecondaryAction(),
+      onActivateOverdrive: () => {
+        gameEngineRef.current?.activateOverdrive();
+      },
+      onCycleSfxMode: () => {
+        const next = gameEngineRef.current?.cycleSfxMode();
+        if (next) {
+          setHud((prev) => ({ ...prev, sfxMode: next }));
+        }
+      },
+      onToggleCinematicCamera: handleToggleCinematicCamera,
+      onTogglePause: handleTogglePause,
+      onExitToMenu: handleReturnToMenu,
+      onReplayRun: () => {
+        if (finishedAtRef.current > 0 && performance.now() - finishedAtRef.current < 550) {
+          return;
+        }
+        void handleStartRunRef.current();
+      },
+      onWheelZoom: (factor, canvasX, canvasY) => {
+        gameEngineRef.current?.zoomByFactor(factor, canvasX, canvasY);
+      },
+      onStepZoom: (factor) => {
+        gameEngineRef.current?.zoomByFactor(factor);
+      },
+      onResetZoom: () => {
+        gameEngineRef.current?.resetCameraView();
+      },
+      onPanDelta: (dx, dy) => {
+        gameEngineRef.current?.panCamera(dx, dy);
+      },
+    });
+    return controller.attach(shellRef.current);
+  }, [handleReturnToMenu, handleToggleCinematicCamera, handleTogglePause]);
+
   const handleSwitchRendererAndReplay = useCallback(
     (nextMode: RendererMode) => {
       audioRef.current?.unlockFromGesture();
@@ -426,12 +492,15 @@ export const App: React.FC = () => {
           rendererMode={rendererMode}
           playstyle={playstyle}
           difficulty={difficulty}
+          selectedSkin={selectedSkin}
+          unlockedSkins={unlockedSkins}
           engineReady={engineReady}
           onSelectTrack={setSelectedTrack}
           onUploadFile={handleUploadFile}
           onSelectRenderer={setRendererMode}
           onSelectPlaystyle={handleSelectPlaystyle}
           onSelectDifficulty={handleSelectDifficulty}
+          onSelectSkin={handleSelectSkin}
           onStartRun={handleStartRun}
         />
       )}
@@ -486,6 +555,8 @@ export const App: React.FC = () => {
         <ResultModal
           hud={hud}
           trackTitle={trackTitle(t, selectedTrack)}
+          selectedSkin={selectedSkin}
+          onEquipSkin={handleSelectSkin}
           onReplay={handleStartRun}
           onSwitchRendererAndReplay={handleSwitchRendererAndReplay}
           onReturnToMenu={handleReturnToMenu}
