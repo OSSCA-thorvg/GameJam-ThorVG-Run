@@ -388,7 +388,6 @@ export interface HUDTelemetry {
   grooveHp: number;
   maxGrooveHp: number;
   isFailed?: boolean;
-  newlyUnlockedSkins?: CrewmateSkinId[];
   overdriveReady?: boolean;
   overdriveActive?: boolean;
   statusBanner: BannerMessage | null;

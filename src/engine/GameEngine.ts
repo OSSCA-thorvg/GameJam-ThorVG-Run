@@ -23,7 +23,7 @@ import {
 } from '../types/game';
 import { BezierTerrain } from './BezierTerrain';
 import { PlayerController } from './PlayerController';
-import { evaluateSkinUnlocksOnClear, nextSfxMode, saveTrackRunResult } from './recordsStore';
+import { nextSfxMode, saveTrackRunResult } from './recordsStore';
 import { ScoreJudgeSystem } from './systems/ScoreJudgeSystem';
 import { VfxPoolSystem } from './systems/VfxPoolSystem';
 
@@ -130,7 +130,6 @@ export class GameEngine {
   private readonly maxGrooveHp: number = 100;
   private hazardDamageCooldown: number = 0;
   private isFailed: boolean = false;
-  private newlyUnlockedSkins: CrewmateSkinId[] = [];
 
   // Status Banner State
   private statusBanner: BannerMessage | null = null;
@@ -988,7 +987,6 @@ export class GameEngine {
     this.grooveHp = this.maxGrooveHp;
     this.hazardDamageCooldown = 0;
     this.isFailed = false;
-    this.newlyUnlockedSkins = [];
 
     this.scoreJudge.reset();
     this.vfx.reset();
@@ -1881,15 +1879,6 @@ export class GameEngine {
         this.finishRecorded = true;
         const { accuracy, rank } = this.scoreJudge.computeAccuracyAndRank();
         const judgmentCounts = this.scoreJudge.snapshotCounts();
-        const newly = evaluateSkinUnlocksOnClear({
-          rank,
-          starsCollected: this.scoreJudge.starsCollected,
-          noMiss: judgmentCounts.miss === 0,
-        });
-        this.newlyUnlockedSkins = newly;
-        if (newly.length > 0) {
-          this.audio.sfx.playSkinUnlock();
-        }
         if (this.currentTrackMeta) {
           const saved = saveTrackRunResult(this.currentTrackMeta, this.difficulty, {
             score: Math.floor(this.scoreJudge.score),
@@ -2356,7 +2345,6 @@ export class GameEngine {
       grooveHp: Math.round(this.grooveHp),
       maxGrooveHp: this.maxGrooveHp,
       isFailed: this.isFailed,
-      newlyUnlockedSkins: this.newlyUnlockedSkins,
       overdriveReady: this.overdriveTimer <= 0 && this.resonanceGauge >= 100,
       overdriveActive: this.overdriveTimer > 0,
       statusBanner: this.statusBanner,

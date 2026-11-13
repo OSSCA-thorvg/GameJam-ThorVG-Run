@@ -10,7 +10,6 @@ import { TrackLoadingModal } from './components/TrackLoadingModal';
 import { GameEngine } from './engine/GameEngine';
 import { InputController } from './engine/InputController';
 import {
-  getUnlockedSkins,
   loadAudioOffsetMs,
   loadSelectedSkin,
   saveAudioOffsetMs,
@@ -64,7 +63,6 @@ const INITIAL_HUD: HUDTelemetry = {
   statusBanner: null,
   isFinished: false,
   isFailed: false,
-  newlyUnlockedSkins: [],
   trapsDestroyed: 0,
   surfMomentum: 0.25,
   speedMultiplier: 1.0,
@@ -98,7 +96,6 @@ export const App: React.FC = () => {
   const [cinematicCamera, setCinematicCamera] = useState<boolean>(() => loadInitialCinematic());
   const [difficulty, setDifficulty] = useState<DifficultyMode>('standard');
   const [menuStep, setMenuStep] = useState<MenuStep>('setup');
-  const [unlockedSkins, setUnlockedSkins] = useState<CrewmateSkinId[]>(() => getUnlockedSkins());
   const [selectedSkin, setSelectedSkin] = useState<CrewmateSkinId>(() => loadSelectedSkin());
   const [audioOffsetMs, setAudioOffsetMs] = useState<number>(() => loadAudioOffsetMs());
   const [engineReady, setEngineReady] = useState<boolean>(false);
@@ -194,11 +191,10 @@ export const App: React.FC = () => {
       if (finishedAtRef.current === 0) {
         finishedAtRef.current = performance.now();
       }
-      setUnlockedSkins(getUnlockedSkins());
     } else {
       finishedAtRef.current = 0;
     }
-  }, [hud.isFinished, hud.newlyUnlockedSkins]);
+  }, [hud.isFinished]);
 
   // Create the ThorVG renderer ('sw' SwCanvas or 'gl' GlCanvas) on a fresh
   // <canvas key={rendererMode} />. Re-created ONLY when the renderer backend changes.
@@ -310,7 +306,6 @@ export const App: React.FC = () => {
     finishedAtRef.current = 0;
     gameEngineRef.current?.stopRun();
     rendererRef.current?.clearForTransition();
-    setUnlockedSkins(getUnlockedSkins());
     setHud((prev) => ({ ...prev, isPaused: false, userZoom: 1.0, isPanned: false }));
     setMenuStep('track');
     setScreen('menu');
@@ -382,7 +377,6 @@ export const App: React.FC = () => {
     const saved = saveSelectedSkin(skinId);
     selectedSkinRef.current = saved;
     setSelectedSkin(saved);
-    setUnlockedSkins(getUnlockedSkins());
     gameEngineRef.current?.setSelectedSkin(saved);
   }, []);
 
@@ -402,7 +396,6 @@ export const App: React.FC = () => {
       grooveHp: 100,
       maxGrooveHp: 100,
       isFailed: false,
-      newlyUnlockedSkins: [],
       rendererMode,
       difficulty,
       sfxMode: gameEngineRef.current?.getSfxMode() ?? prev.sfxMode ?? 'full',
@@ -537,7 +530,6 @@ export const App: React.FC = () => {
           rendererMode={rendererMode}
           difficulty={difficulty}
           selectedSkin={selectedSkin}
-          unlockedSkins={unlockedSkins}
           engineReady={engineReady}
           step={menuStep}
           onStepChange={setMenuStep}
@@ -602,8 +594,6 @@ export const App: React.FC = () => {
         <ResultModal
           hud={hud}
           trackTitle={trackTitle(t, selectedTrack)}
-          selectedSkin={selectedSkin}
-          onEquipSkin={handleSelectSkin}
           onReplay={handleStartRun}
           onSwitchRendererAndReplay={handleSwitchRendererAndReplay}
           onReturnToMenu={handleReturnToMenu}

@@ -1,9 +1,7 @@
 import React from 'react';
 import { useI18n } from '../i18n/I18nProvider';
 import {
-  CREWMATE_SKIN_CONFIG,
   FORM_CONFIG,
-  type CrewmateSkinId,
   type HUDTelemetry,
   type RendererMode,
   type ResultRank,
@@ -12,8 +10,6 @@ import {
 interface ResultModalProps {
   hud: HUDTelemetry;
   trackTitle: string;
-  selectedSkin: CrewmateSkinId;
-  onEquipSkin: (skinId: CrewmateSkinId) => void;
   onReplay: () => void;
   onSwitchRendererAndReplay: (nextMode: RendererMode) => void;
   onReturnToMenu: () => void;
@@ -29,8 +25,6 @@ const RANK_COLORS: Record<ResultRank, string> = {
 export const ResultModal: React.FC<ResultModalProps> = ({
   hud,
   trackTitle,
-  selectedSkin,
-  onEquipSkin,
   onReplay,
   onSwitchRendererAndReplay,
   onReturnToMenu,
@@ -45,7 +39,6 @@ export const ResultModal: React.FC<ResultModalProps> = ({
   const accuracy = (hud.accuracy ?? 100).toFixed(1);
   const counts = hud.judgmentCounts ?? { perfect: 0, great: 0, good: 0, miss: 0 };
   const isNoMiss = !isFailed && counts.miss === 0;
-  const newlyUnlocked = !isFailed ? (hud.newlyUnlockedSkins ?? []) : [];
   const failedProgressPct = Math.min(99, Math.max(0, Math.round(hud.progress * 100)));
 
   return (
@@ -73,43 +66,6 @@ export const ResultModal: React.FC<ResultModalProps> = ({
               </span>
             )}
             {isNoMiss && <span className="result-nomiss-pill">{t.result.noMissClear}</span>}
-          </div>
-        )}
-
-        {newlyUnlocked.length > 0 && (
-          <div className="result-skin-unlock-banner" data-testid="result-skin-unlock-banner">
-            <strong className="skin-unlock-banner-title">{t.result.skinUnlockedTitle}</strong>
-            <div className={`skin-unlock-list${newlyUnlocked.length >= 2 ? ' multi-col' : ''}`}>
-              {newlyUnlocked.map((skinId) => {
-                const skinCfg = CREWMATE_SKIN_CONFIG[skinId];
-                const skinInfo = t.skins[skinId];
-                const isEquipped = selectedSkin === skinId;
-                return (
-                  <div key={skinId} className="skin-unlock-item">
-                    <div className="skin-unlock-info">
-                      <span
-                        className="skin-unlock-dot"
-                        style={{
-                          backgroundColor: skinCfg.accentHex,
-                          boxShadow: `0 0 8px ${skinCfg.accentHex}`,
-                        }}
-                      />
-                      <strong style={{ color: skinCfg.accentHex }}>{skinInfo.name}</strong>
-                      <small className="skin-unlock-badge-pill">{skinInfo.badge}</small>
-                    </div>
-                    <button
-                      type="button"
-                      data-testid={`result-equip-${skinId}`}
-                      className={`skin-equip-btn${isEquipped ? ' equipped' : ''}`}
-                      disabled={isEquipped}
-                      onClick={() => onEquipSkin(skinId)}
-                    >
-                      {isEquipped ? t.result.equippedSkin : t.result.equipSkin}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
           </div>
         )}
 

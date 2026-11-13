@@ -33,7 +33,6 @@ interface StartScreenProps {
   rendererMode: RendererMode;
   difficulty: DifficultyMode;
   selectedSkin: CrewmateSkinId;
-  unlockedSkins: CrewmateSkinId[];
   engineReady: boolean;
   step: MenuStep;
   onStepChange: (step: MenuStep) => void;
@@ -54,7 +53,6 @@ export const StartScreen: React.FC<StartScreenProps> = ({
   rendererMode,
   difficulty,
   selectedSkin,
-  unlockedSkins,
   engineReady,
   step,
   onStepChange,
@@ -426,12 +424,11 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                 </div>
               </section>
 
-              {/* 2. Crewmate Vector Suit & Blade Trail (2x2 Grid) */}
+              {/* 2. Crewmate Vector Suit & Blade Trail (2x2 Grid — All 4 Unlocked) */}
               <section className="menu-section">
                 <h2>{t.menu.skinSection}</h2>
                 <div className="skin-tabs" role="radiogroup" aria-label={t.menu.skinSection}>
                   {CREWMATE_SKIN_ORDER.map((skinKey) => {
-                    const isUnlocked = unlockedSkins.includes(skinKey);
                     const isEquipped = selectedSkin === skinKey;
                     const skinCfg = CREWMATE_SKIN_CONFIG[skinKey];
                     const skinInfo = t.skins[skinKey];
@@ -439,9 +436,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                       id: `skin-${skinKey}`,
                       title: skinInfo.name,
                       body: skinInfo.detail,
-                      meta: isUnlocked
-                        ? `${isEquipped ? t.menu.skinEquipped : t.menu.skinReady} · ${skinInfo.unlockReq}`
-                        : `🔒 ${format(t.menu.skinUnlockPrefix, { req: skinInfo.unlockReq })}`,
+                      meta: isEquipped ? t.menu.skinEquipped : t.menu.skinPreviewHint,
                       accentHex: skinCfg.accentHex,
                     };
                     return (
@@ -450,10 +445,9 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                         type="button"
                         role="radio"
                         aria-checked={isEquipped}
-                        aria-disabled={!isUnlocked}
                         data-testid={`skin-tab-${skinKey}`}
                         data-skin={skinKey}
-                        className={`skin-tab${isEquipped ? ' active' : ''}${!isUnlocked ? ' locked' : ''}`}
+                        className={`skin-tab${isEquipped ? ' active' : ''}`}
                         style={
                           isEquipped
                             ? {
@@ -463,37 +457,23 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                             : undefined
                         }
                         {...bindHoverTip(skinTip)}
-                        onClick={(e) => {
-                          if (!isUnlocked) {
-                            toggleTouchTip(e, skinTip);
-                            return;
-                          }
-                          onSelectSkin(skinKey);
-                        }}
+                        onClick={() => onSelectSkin(skinKey)}
                       >
                         <div className="skin-tab-header">
-                          <strong style={{ color: isUnlocked ? skinCfg.accentHex : '#7f93b5' }}>
-                            {skinInfo.name}
-                          </strong>
+                          <strong style={{ color: skinCfg.accentHex }}>{skinInfo.name}</strong>
                           <small
-                            className={`skin-status-pill ${isEquipped ? 'equipped' : isUnlocked ? 'unlocked' : 'locked'}`}
+                            className={`skin-status-pill ${isEquipped ? 'equipped' : 'available'}`}
                             style={
                               isEquipped
                                 ? { backgroundColor: skinCfg.accentHex, color: '#070914' }
                                 : undefined
                             }
                           >
-                            {isEquipped
-                              ? t.menu.skinEquipped
-                              : isUnlocked
-                                ? t.menu.skinReady
-                                : `🔒 ${skinInfo.badge}`}
+                            {isEquipped ? t.menu.skinEquipped : skinInfo.badge}
                           </small>
                         </div>
                         <div className="skin-tab-sub">
-                          <span className="skin-summary-text">
-                            {isUnlocked ? skinInfo.summary : `🔒 ${skinInfo.lockedSummary}`}
-                          </span>
+                          <span className="skin-summary-text">{skinInfo.summary}</span>
                           <span className="menu-hover-cue" aria-hidden="true">
                             ⓘ
                           </span>

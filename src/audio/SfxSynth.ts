@@ -268,17 +268,4 @@ export class SfxSynth {
     this.schedulePercussiveTone(210, 34, 0.44, 0.14, 'triangle', 0.025, 0.002);
     this.scheduleNoiseTransient(420, 'lowpass', 1.1, 0.22, 0.14);
   }
-
-  public playSkinUnlock(): void {
-    if (this.mode === 'off' || !this.ctx || this.ctx.state !== 'running') return;
-    const sweeps: ReadonlyArray<[number, number]> = [
-      [880, 1320],
-      [1320, 1760],
-      [1760, 2640],
-    ];
-    for (let i = 0; i < sweeps.length; i++) {
-      const [f0, f1] = sweeps[i]!;
-      this.schedulePercussiveTone(f0, f1, 0.14, 0.095, 'triangle', i * 0.055, 0.002);
-    }
-  }
 }

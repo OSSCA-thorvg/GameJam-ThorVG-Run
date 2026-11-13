@@ -11,7 +11,6 @@ import {
 
 const RECORDS_STORAGE_KEY = 'thorvg_run:records:v2';
 const SFX_MODE_STORAGE_KEY = 'thorvg_run:sfx_mode:v1';
-const UNLOCKED_SKINS_KEY = 'thorvg_run:unlocked_skins:v1';
 const SELECTED_SKIN_KEY = 'thorvg_run:selected_skin:v1';
 const AUDIO_OFFSET_MS_KEY = 'thorvg_run:audio_offset_ms:v1';
 
@@ -162,68 +161,10 @@ function isValidSkinId(v: unknown): v is CrewmateSkinId {
   );
 }
 
-export function getUnlockedSkins(): CrewmateSkinId[] {
-  const set = new Set<CrewmateSkinId>(['classic']);
-
-  try {
-    const raw = window.localStorage.getItem(UNLOCKED_SKINS_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as unknown;
-      if (Array.isArray(parsed)) {
-        for (const item of parsed) {
-          if (isValidSkinId(item)) {
-            set.add(item);
-          }
-        }
-      }
-    }
-  } catch {
-    // Ignore storage access errors
-  }
-
-  for (const rec of Object.values(readAllRecords())) {
-    if (!rec || typeof rec !== 'object') continue;
-    if (rec.bestStars >= 3) set.add('prism');
-    if (rec.noMissCleared) set.add('flawless');
-    if (rec.bestRank === 'S') set.add('grandmaster');
-  }
-
-  const ordered = CREWMATE_SKIN_ORDER.filter((id) => set.has(id));
-  try {
-    window.localStorage.setItem(UNLOCKED_SKINS_KEY, JSON.stringify(ordered));
-  } catch {
-    // Ignore quota/storage errors
-  }
-  return ordered;
-}
-
-export function evaluateSkinUnlocksOnClear(summary: {
-  rank: ResultRank;
-  starsCollected: number;
-  noMiss: boolean;
-}): CrewmateSkinId[] {
-  const before = new Set<CrewmateSkinId>(getUnlockedSkins());
-  const after = new Set<CrewmateSkinId>(before);
-
-  if (summary.starsCollected >= 3) after.add('prism');
-  if (summary.noMiss) after.add('flawless');
-  if (summary.rank === 'S') after.add('grandmaster');
-
-  const persisted = CREWMATE_SKIN_ORDER.filter((id) => after.has(id));
-  try {
-    window.localStorage.setItem(UNLOCKED_SKINS_KEY, JSON.stringify(persisted));
-  } catch {
-    // Ignore quota/storage errors
-  }
-
-  return CREWMATE_SKIN_ORDER.filter((id) => after.has(id) && !before.has(id));
-}
-
 export function loadSelectedSkin(): CrewmateSkinId {
-  const unlocked = getUnlockedSkins();
   try {
     const raw = window.localStorage.getItem(SELECTED_SKIN_KEY);
-    if (isValidSkinId(raw) && unlocked.includes(raw)) {
+    if (isValidSkinId(raw)) {
       return raw;
     }
   } catch {
@@ -233,9 +174,7 @@ export function loadSelectedSkin(): CrewmateSkinId {
 }
 
 export function saveSelectedSkin(skinId: CrewmateSkinId): CrewmateSkinId {
-  const unlocked = getUnlockedSkins();
-  const safeSkin: CrewmateSkinId =
-    isValidSkinId(skinId) && unlocked.includes(skinId) ? skinId : 'classic';
+  const safeSkin: CrewmateSkinId = isValidSkinId(skinId) ? skinId : 'classic';
   try {
     window.localStorage.setItem(SELECTED_SKIN_KEY, safeSkin);
   } catch {
