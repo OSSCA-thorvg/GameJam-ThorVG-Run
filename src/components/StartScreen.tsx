@@ -23,6 +23,7 @@ import {
   type RendererMode,
   type TrackMetadata,
 } from '../types/game';
+import { MenuTooltipPortal, useMenuTooltip, type MenuTooltipData } from './MenuTooltip';
 
 export type MenuStep = 'setup' | 'track';
 
@@ -72,16 +73,44 @@ export const StartScreen: React.FC<StartScreenProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
 
+  const { activeTip, activeTipId, showTip, toggleTouchTip, hideTip } = useMenuTooltip();
+
   useEffect(() => {
     if (cardRef.current) {
       cardRef.current.scrollTop = 0;
     }
   }, [step]);
 
+  useEffect(() => {
+    hideTip();
+  }, [step, lang, hideTip]);
+
   // Formats this browser can decode. Drives the hint, the picker filter, and validation.
   const supportedFormats = useMemo(() => detectSupportedAudioFormats(), []);
   const supportedList = supportedFormats.length > 0 ? formatLabels(supportedFormats) : '—';
   const acceptAttr = useMemo(() => buildAcceptAttribute(supportedFormats), [supportedFormats]);
+
+  const bindHoverTip = (tip: MenuTooltipData) => ({
+    'aria-describedby': activeTipId(tip.id),
+    onPointerEnter: (e: React.PointerEvent<HTMLElement>) => {
+      if (e.pointerType === 'touch') return;
+      showTip(e.currentTarget, tip);
+    },
+    onPointerLeave: (e: React.PointerEvent<HTMLElement>) => {
+      if (e.pointerType === 'touch') return;
+      hideTip();
+    },
+    onFocus: (e: React.FocusEvent<HTMLElement>) => {
+      if (e.currentTarget.matches(':focus-visible')) {
+        showTip(e.currentTarget, tip);
+      }
+    },
+    onBlur: () => {
+      if (activeTip?.id === tip.id) {
+        hideTip();
+      }
+    },
+  });
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -109,6 +138,140 @@ export const StartScreen: React.FC<StartScreenProps> = ({
   const allTracks = [...BUILT_IN_TRACKS, ...customTracks];
   const equippedSkinCfg = CREWMATE_SKIN_CONFIG[selectedSkin];
 
+  const introTip: MenuTooltipData = {
+    id: 'intro-info',
+    title: t.menu.introTipTitle,
+    body: t.menu.introTipBody,
+  };
+
+  const stepSetupTip: MenuTooltipData = {
+    id: 'step-setup',
+    title: t.menu.stepSetupTitle,
+    body: t.menu.stepSetupTip,
+  };
+
+  const stepTrackTip: MenuTooltipData = {
+    id: 'step-track',
+    title: t.menu.stepTrackTitle,
+    body: t.menu.stepTrackTip,
+  };
+
+  const rendererOptions: ReadonlyArray<{
+    mode: RendererMode;
+    testId: string;
+    title: string;
+    desc: string;
+    tip: MenuTooltipData;
+  }> = [
+    {
+      mode: 'sw',
+      testId: 'renderer-option-sw',
+      title: t.menu.rendererCpuTitle,
+      desc: t.menu.rendererCpuDesc,
+      tip: {
+        id: 'renderer-sw',
+        title: t.menu.rendererCpuTitle,
+        body: t.menu.rendererCpuTip,
+        meta: t.menu.rendererCpuDesc,
+        accentHex: '#05D5FF',
+      },
+    },
+    {
+      mode: 'gl',
+      testId: 'renderer-option-gl',
+      title: t.menu.rendererGpuTitle,
+      desc: t.menu.rendererGpuDesc,
+      tip: {
+        id: 'renderer-gl',
+        title: t.menu.rendererGpuTitle,
+        body: t.menu.rendererGpuTip,
+        meta: t.menu.rendererGpuDesc,
+        accentHex: '#FF2A6D',
+      },
+    },
+  ];
+
+  const editSetupTip: MenuTooltipData = {
+    id: 'edit-setup',
+    title: t.menu.editSetupBtn,
+    body: t.menu.editSetupTip,
+  };
+
+  const uploadSummaryBody =
+    supportedFormats.length > 0
+      ? format(t.upload.compactHint, {
+          list: supportedList,
+          maxMb: MAX_UPLOAD_MB,
+          minSeconds: MIN_TRACK_SECONDS,
+        })
+      : t.upload.noneSupported;
+
+  const uploadDropzoneTip: MenuTooltipData = {
+    id: 'upload-dropzone',
+    title: t.upload.tipTitle,
+    body: uploadSummaryBody,
+  };
+
+  const uploadInfoTip: MenuTooltipData = {
+    id: 'upload-info',
+    title: t.upload.tipTitle,
+    body: uploadSummaryBody,
+  };
+
+  const resonanceInfoTip: MenuTooltipData = {
+    id: 'resonance-info',
+    title: t.menu.resonanceTipTitle,
+    body: t.menu.resonanceTipBody,
+    accentHex: '#FFE600',
+  };
+
+  const controlPills: ReadonlyArray<{
+    id: string;
+    toneClass: string;
+    tag: string;
+    keyText: string;
+    desc: string;
+    detail: string;
+    accentHex: string;
+  }> = [
+    {
+      id: 'ctrl-high',
+      toneClass: 'tone-cyan',
+      tag: ctrlGuide.highTag,
+      keyText: ctrlGuide.highKey,
+      desc: ctrlGuide.highDesc,
+      detail: ctrlGuide.highDetail,
+      accentHex: '#05D5FF',
+    },
+    {
+      id: 'ctrl-low',
+      toneClass: 'tone-crimson',
+      tag: ctrlGuide.lowTag,
+      keyText: ctrlGuide.lowKey,
+      desc: ctrlGuide.lowDesc,
+      detail: ctrlGuide.lowDetail,
+      accentHex: '#FF2A6D',
+    },
+    {
+      id: 'ctrl-chord',
+      toneClass: 'tone-gold',
+      tag: ctrlGuide.chordTag,
+      keyText: ctrlGuide.chordKey,
+      desc: ctrlGuide.chordDesc,
+      detail: ctrlGuide.chordDetail,
+      accentHex: '#FFE600',
+    },
+    {
+      id: 'ctrl-util',
+      toneClass: 'tone-neutral',
+      tag: ctrlGuide.utilTag,
+      keyText: ctrlGuide.utilKey,
+      desc: ctrlGuide.utilDesc,
+      detail: ctrlGuide.utilDetail,
+      accentHex: '#34D399',
+    },
+  ];
+
   return (
     <div
       className="start-screen-backdrop"
@@ -129,12 +292,25 @@ export const StartScreen: React.FC<StartScreenProps> = ({
         data-testid="start-card"
         data-menu-step={step}
         data-engine-ready={engineReady ? 'true' : 'false'}
+        onScrollCapture={hideTip}
       >
         <header className="start-header">
           <div>
             <span className="badge-version">{t.menu.versionBadge}</span>
             <h1 className="title-logo">THORVG RUN</h1>
-            <p className="subtitle">{t.menu.subtitle}</p>
+            <div className="subtitle-row">
+              <p className="subtitle">{t.menu.subtitle}</p>
+              <button
+                type="button"
+                className="menu-info-badge"
+                data-testid="menu-intro-info-btn"
+                aria-label={t.menu.introTipTitle}
+                {...bindHoverTip(introTip)}
+                onClick={(e) => toggleTouchTip(e, introTip)}
+              >
+                ⓘ
+              </button>
+            </div>
           </div>
           <div className="header-actions">
             <div className="lang-toggle" role="group" aria-label={t.menu.language}>
@@ -168,6 +344,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
             data-testid="menu-step-setup"
             aria-current={step === 'setup' ? 'step' : undefined}
             className={`menu-step-tab${step === 'setup' ? ' active' : ' completed'}`}
+            {...bindHoverTip(stepSetupTip)}
             onClick={() => onStepChange('setup')}
           >
             <span className="menu-step-num" aria-hidden="true">
@@ -175,7 +352,6 @@ export const StartScreen: React.FC<StartScreenProps> = ({
             </span>
             <span className="menu-step-copy">
               <strong>{t.menu.stepSetupTitle}</strong>
-              <small>{t.menu.stepSetupHint}</small>
             </span>
           </button>
 
@@ -184,6 +360,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
             data-testid="menu-step-track"
             aria-current={step === 'track' ? 'step' : undefined}
             className={`menu-step-tab${step === 'track' ? ' active' : ''}`}
+            {...bindHoverTip(stepTrackTip)}
             onClick={() => onStepChange('track')}
           >
             <span className="menu-step-num" aria-hidden="true">
@@ -191,7 +368,6 @@ export const StartScreen: React.FC<StartScreenProps> = ({
             </span>
             <span className="menu-step-copy">
               <strong>{t.menu.stepTrackTitle}</strong>
-              <small>{t.menu.stepTrackHint}</small>
             </span>
           </button>
         </nav>
@@ -203,39 +379,50 @@ export const StartScreen: React.FC<StartScreenProps> = ({
               <section className="menu-section">
                 <h2>{t.menu.rendererSection}</h2>
                 <div className="renderer-radio-group">
-                  <label
-                    data-testid="renderer-option-sw"
-                    className={`renderer-option${rendererMode === 'sw' ? ' selected' : ''}`}
-                  >
-                    <input
-                      type="radio"
-                      name="renderer"
-                      checked={rendererMode === 'sw'}
-                      onChange={() => onSelectRenderer('sw')}
-                    />
-                    <span className="radio-dot" />
-                    <div className="renderer-info">
-                      <strong>{t.menu.rendererCpuTitle}</strong>
-                      <span>{t.menu.rendererCpuDesc}</span>
-                    </div>
-                  </label>
-
-                  <label
-                    data-testid="renderer-option-gl"
-                    className={`renderer-option${rendererMode === 'gl' ? ' selected' : ''}`}
-                  >
-                    <input
-                      type="radio"
-                      name="renderer"
-                      checked={rendererMode === 'gl'}
-                      onChange={() => onSelectRenderer('gl')}
-                    />
-                    <span className="radio-dot" />
-                    <div className="renderer-info">
-                      <strong>{t.menu.rendererGpuTitle}</strong>
-                      <span>{t.menu.rendererGpuDesc}</span>
-                    </div>
-                  </label>
+                  {rendererOptions.map((opt) => (
+                    <label
+                      key={opt.mode}
+                      data-testid={opt.testId}
+                      className={`renderer-option${rendererMode === opt.mode ? ' selected' : ''}`}
+                      onPointerEnter={(e) => {
+                        if (e.pointerType === 'touch') return;
+                        showTip(e.currentTarget, opt.tip);
+                      }}
+                      onPointerLeave={(e) => {
+                        if (e.pointerType === 'touch') return;
+                        hideTip();
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="renderer"
+                        checked={rendererMode === opt.mode}
+                        aria-describedby={activeTipId(opt.tip.id)}
+                        onChange={() => onSelectRenderer(opt.mode)}
+                        onFocus={(e) => {
+                          if (
+                            e.currentTarget.matches(':focus-visible') &&
+                            e.currentTarget.parentElement
+                          ) {
+                            showTip(e.currentTarget.parentElement, opt.tip);
+                          }
+                        }}
+                        onBlur={() => {
+                          if (activeTip?.id === opt.tip.id) {
+                            hideTip();
+                          }
+                        }}
+                      />
+                      <span className="radio-dot" />
+                      <div className="renderer-info">
+                        <strong>{opt.title}</strong>
+                        <span>{opt.desc}</span>
+                      </div>
+                      <span className="menu-hover-cue" aria-hidden="true">
+                        ⓘ
+                      </span>
+                    </label>
+                  ))}
                 </div>
               </section>
 
@@ -248,13 +435,22 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                     const isEquipped = selectedSkin === skinKey;
                     const skinCfg = CREWMATE_SKIN_CONFIG[skinKey];
                     const skinInfo = t.skins[skinKey];
+                    const skinTip: MenuTooltipData = {
+                      id: `skin-${skinKey}`,
+                      title: skinInfo.name,
+                      body: skinInfo.detail,
+                      meta: isUnlocked
+                        ? `${isEquipped ? t.menu.skinEquipped : t.menu.skinReady} · ${skinInfo.unlockReq}`
+                        : `🔒 ${format(t.menu.skinUnlockPrefix, { req: skinInfo.unlockReq })}`,
+                      accentHex: skinCfg.accentHex,
+                    };
                     return (
                       <button
                         key={skinKey}
                         type="button"
                         role="radio"
                         aria-checked={isEquipped}
-                        disabled={!isUnlocked}
+                        aria-disabled={!isUnlocked}
                         data-testid={`skin-tab-${skinKey}`}
                         data-skin={skinKey}
                         className={`skin-tab${isEquipped ? ' active' : ''}${!isUnlocked ? ' locked' : ''}`}
@@ -266,7 +462,14 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                               }
                             : undefined
                         }
-                        onClick={() => isUnlocked && onSelectSkin(skinKey)}
+                        {...bindHoverTip(skinTip)}
+                        onClick={(e) => {
+                          if (!isUnlocked) {
+                            toggleTouchTip(e, skinTip);
+                            return;
+                          }
+                          onSelectSkin(skinKey);
+                        }}
                       >
                         <div className="skin-tab-header">
                           <strong style={{ color: isUnlocked ? skinCfg.accentHex : '#7f93b5' }}>
@@ -288,7 +491,12 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                           </small>
                         </div>
                         <div className="skin-tab-sub">
-                          <span>{isUnlocked ? skinInfo.desc : `🔒 ${skinInfo.unlockReq}`}</span>
+                          <span className="skin-summary-text">
+                            {isUnlocked ? skinInfo.summary : `🔒 ${skinInfo.lockedSummary}`}
+                          </span>
+                          <span className="menu-hover-cue" aria-hidden="true">
+                            ⓘ
+                          </span>
                         </div>
                       </button>
                     );
@@ -324,6 +532,18 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                       const info = t.difficulties[modeKey];
                       const active = difficulty === modeKey;
                       const modeRec = getTrackRecord(selectedTrack, modeKey);
+                      const diffTip: MenuTooltipData = {
+                        id: `difficulty-${modeKey}`,
+                        title: info.tipTitle,
+                        body: info.tipBody,
+                        meta: modeRec
+                          ? `${format(t.menu.bestRecord, {
+                              rank: modeRec.bestRank,
+                              score: modeRec.bestScore.toLocaleString(),
+                            })} · ★${modeRec.bestStars}/3`
+                          : info.tag,
+                        accentHex: accent,
+                      };
                       return (
                         <button
                           key={modeKey}
@@ -337,12 +557,13 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                             borderColor: active ? accent : undefined,
                             boxShadow: active ? `0 0 16px ${accent}33` : undefined,
                           }}
+                          {...bindHoverTip(diffTip)}
                           onClick={() => onSelectDifficulty(modeKey)}
                         >
-                          <strong style={{ color: active ? accent : '#dce8ff' }}>{info.name}</strong>
-                          <small className="difficulty-speed-pill">
-                            {modeRec ? `${modeRec.bestRank} · ★${modeRec.bestStars}/3` : info.speed}
-                          </small>
+                          <strong style={{ color: active ? accent : '#dce8ff' }}>
+                            {modeKey === 'casual' ? '🛡️' : '⚔️'} {info.shortName}
+                          </strong>
+                          <small className="difficulty-speed-pill">{info.tag}</small>
                         </button>
                       );
                     })}
@@ -365,16 +586,13 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                       type="button"
                       className="loadout-edit-btn"
                       data-testid="menu-edit-setup-btn"
+                      {...bindHoverTip(editSetupTip)}
                       onClick={() => onStepChange('setup')}
                     >
                       {t.menu.editSetupBtn}
                     </button>
                   </div>
                 </div>
-
-                <p className="active-mode-hint" data-testid="active-mode-hint">
-                  {t.difficulties[difficulty].desc}
-                </p>
               </div>
 
               {/* Select Track & Custom Audio Dropzone */}
@@ -382,33 +600,44 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                 <div className="track-section-header">
                   <h2>{t.menu.trackSection}</h2>
                   <span className="track-count-pill">
-                    {format(t.menu.trackCountSummary, {
-                      count: allTracks.length,
-                      difficulty: t.difficulties[difficulty].shortName,
-                    })}
+                    {format(t.menu.trackCountSummary, { count: allTracks.length })}
                   </span>
                 </div>
 
                 <div className="track-list" data-testid="menu-track-list">
-                  {allTracks.map((track, idx) => {
+                  {allTracks.map((track) => {
                     const isSelected = selectedTrack.id === track.id;
                     const title = trackTitle(t, track);
                     const rec = getTrackRecord(track, difficulty);
+                    const trackTip: MenuTooltipData = {
+                      id: `track-${track.id}`,
+                      title,
+                      body: `${trackArtist(t, track)} · ${format(
+                        track.isCustom ? t.menu.trackTipCustom : t.menu.trackTipBuiltIn,
+                        { seconds: track.durationSec }
+                      )}`,
+                      meta: rec
+                        ? `${t.difficulties[difficulty].shortName} · ${format(t.menu.bestRecord, {
+                            rank: rec.bestRank,
+                            score: rec.bestScore.toLocaleString(),
+                          })} · ★${rec.bestStars}/3${rec.noMissCleared ? ` · ${t.menu.noMissBadge}` : ''}`
+                        : format(t.menu.trackNoRecord, {
+                            mode: t.difficulties[difficulty].shortName,
+                          }),
+                      accentHex: '#05D5FF',
+                    };
                     return (
                       <button
                         key={track.id}
                         type="button"
                         data-testid={`track-item-${track.id}`}
                         className={`track-item${isSelected ? ' selected' : ''}`}
+                        {...bindHoverTip(trackTip)}
                         onClick={() => onSelectTrack(track)}
                       >
                         <span className="track-icon">{track.isCustom ? '📂' : '🎵'}</span>
                         <div className="track-meta">
-                          <strong>
-                            {track.isCustom
-                              ? format(t.menu.customTrack, { title })
-                              : format(t.menu.builtInTrack, { index: idx + 1, title })}
-                          </strong>
+                          <strong>{title}</strong>
                           <span>
                             {format(t.menu.trackMeta, {
                               artist: trackArtist(t, track),
@@ -431,82 +660,98 @@ export const StartScreen: React.FC<StartScreenProps> = ({
                           </div>
                         )}
                         {isSelected && <span className="selected-pill">{t.menu.selected}</span>}
+                        <span className="menu-hover-cue" aria-hidden="true">
+                          ⓘ
+                        </span>
                       </button>
                     );
                   })}
                 </div>
 
-                <div
-                  className="upload-dropzone"
-                  data-testid="menu-upload-dropzone"
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => fileInputRef.current?.click()}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      fileInputRef.current?.click();
-                    }
-                  }}
-                >
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept={acceptAttr}
-                    style={{ display: 'none' }}
-                    onClick={(e) => e.stopPropagation()}
-                    onChange={(e) => {
-                      void handleFiles(e.target.files);
-                      // Allow re-selecting the same file after an error.
-                      e.target.value = '';
+                <div className="upload-dropzone-row">
+                  <div
+                    className="upload-dropzone"
+                    data-testid="menu-upload-dropzone"
+                    role="button"
+                    tabIndex={0}
+                    {...bindHoverTip(uploadDropzoneTip)}
+                    onClick={() => fileInputRef.current?.click()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        fileInputRef.current?.click();
+                      }
                     }}
-                  />
-                  <span className="upload-dropzone-title">{t.upload.dropzone}</span>
-                  <small className="upload-formats">
-                    {supportedFormats.length > 0
-                      ? format(t.upload.compactHint, {
-                          list: supportedList,
-                          maxMb: MAX_UPLOAD_MB,
-                          minSeconds: MIN_TRACK_SECONDS,
-                        })
-                      : t.upload.noneSupported}
-                  </small>
-                  {uploadStatus && <small className="upload-status">{uploadStatus}</small>}
+                  >
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept={acceptAttr}
+                      style={{ display: 'none' }}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => {
+                        void handleFiles(e.target.files);
+                        // Allow re-selecting the same file after an error.
+                        e.target.value = '';
+                      }}
+                    />
+                    <span className="upload-dropzone-title">{t.upload.dropzone}</span>
+                    <span className="upload-dropzone-sub">{t.upload.dropzoneSub}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="menu-info-badge upload-format-btn"
+                    data-testid="menu-upload-info-btn"
+                    aria-label={t.upload.tipTitle}
+                    {...bindHoverTip(uploadInfoTip)}
+                    onClick={(e) => toggleTouchTip(e, uploadInfoTip)}
+                  >
+                    {t.upload.formatBadge}
+                  </button>
                 </div>
+                {uploadStatus && <small className="upload-status">{uploadStatus}</small>}
               </section>
 
               {/* 2-Lane Core Controls Guide */}
               <div className="menu-controls-wrap">
-                <h3 className="controls-guide-title">{t.menu.controlsSectionTitle}</h3>
+                <div className="controls-header-row">
+                  <h3 className="controls-guide-title">{t.menu.controlsSectionTitle}</h3>
+                  <button
+                    type="button"
+                    className="menu-info-badge"
+                    data-testid="menu-resonance-info-btn"
+                    aria-label={t.menu.resonanceTipTitle}
+                    {...bindHoverTip(resonanceInfoTip)}
+                    onClick={(e) => toggleTouchTip(e, resonanceInfoTip)}
+                  >
+                    {t.menu.resonanceBadge}
+                  </button>
+                </div>
                 <div className="controls-pill-grid" data-testid="menu-controls-guide">
-                  <div className="control-guide-pill tone-cyan">
-                    <div className="control-pill-top">
-                      <span className="control-lane-tag">{ctrlGuide.highTag}</span>
-                      <strong>{ctrlGuide.highKey}</strong>
-                    </div>
-                    <small>{ctrlGuide.highDesc}</small>
-                  </div>
-                  <div className="control-guide-pill tone-crimson">
-                    <div className="control-pill-top">
-                      <span className="control-lane-tag">{ctrlGuide.lowTag}</span>
-                      <strong>{ctrlGuide.lowKey}</strong>
-                    </div>
-                    <small>{ctrlGuide.lowDesc}</small>
-                  </div>
-                  <div className="control-guide-pill tone-gold">
-                    <div className="control-pill-top">
-                      <span className="control-lane-tag">{ctrlGuide.chordTag}</span>
-                      <strong>{ctrlGuide.chordKey}</strong>
-                    </div>
-                    <small>{ctrlGuide.chordDesc}</small>
-                  </div>
-                  <div className="control-guide-pill tone-neutral">
-                    <div className="control-pill-top">
-                      <span className="control-lane-tag">{ctrlGuide.utilTag}</span>
-                      <strong>{ctrlGuide.utilKey}</strong>
-                    </div>
-                    <small>{ctrlGuide.utilDesc}</small>
-                  </div>
+                  {controlPills.map((pill) => {
+                    const pillTip: MenuTooltipData = {
+                      id: pill.id,
+                      title: `${pill.tag} · ${pill.desc}`,
+                      body: pill.detail,
+                      meta: pill.keyText,
+                      accentHex: pill.accentHex,
+                    };
+                    return (
+                      <div
+                        key={pill.id}
+                        tabIndex={0}
+                        className={`control-guide-pill ${pill.toneClass}`}
+                        {...bindHoverTip(pillTip)}
+                        onClick={(e) => toggleTouchTip(e, pillTip)}
+                      >
+                        <div className="control-pill-top">
+                          <span className="control-lane-tag">{pill.tag}</span>
+                          <strong>{pill.keyText}</strong>
+                        </div>
+                        <small>{pill.desc}</small>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -533,6 +778,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({
           </>
         )}
       </div>
+      <MenuTooltipPortal activeTip={activeTip} hideTip={hideTip} />
     </div>
   );
 };
