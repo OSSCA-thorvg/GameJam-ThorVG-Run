@@ -477,6 +477,7 @@ export class ThorVGRenderer {
   }
 
   public resize(width: number, height: number): void {
+    if (width === this.width && height === this.height) return;
     this.width = width;
     this.height = height;
     if (this.canvas && !this.disposed) {
@@ -713,11 +714,16 @@ export class ThorVGRenderer {
           : slashBurst > 0.45
             ? 6
             : Math.floor(surfMomentum * 7);
+      const edgePad = Math.min(45, Math.max(12, height * 0.07));
+      const bandSpan = Math.max(24, Math.min(140, Math.floor(height * 0.18)));
       for (let i = 0; i < lineCount; i++) {
         const seed = (i * 197 + Math.floor(state.timeSec * 22)) % 100;
         const lx =
           ((width - ((state.timeSec * 1550 + i * 230) % (width + 260))) + width) % width;
-        const ly = i % 2 === 0 ? 45 + (seed % 140) : height - 55 - (seed % 140);
+        const ly =
+          i % 2 === 0
+            ? edgePad + (seed % bandSpan)
+            : height - edgePad - 8 - (seed % bandSpan);
         const len = 70 + surfMomentum * 115;
         shapes.effects.moveTo(lx, ly).lineTo(lx + len, ly);
         hasEffects = true;

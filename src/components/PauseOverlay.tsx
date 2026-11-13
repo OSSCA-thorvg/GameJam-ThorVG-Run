@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useCoarsePointer } from '../hooks/useCoarsePointer';
 import { useI18n } from '../i18n/I18nProvider';
 import type { HUDTelemetry, RendererMode } from '../types/game';
 
@@ -44,6 +45,8 @@ export const PauseOverlay: React.FC<PauseOverlayProps> = ({
   onToggleRenderer,
 }) => {
   const { t } = useI18n();
+  const isCoarsePointer = useCoarsePointer();
+  const ctrlGuide = isCoarsePointer ? t.menu.controlsTouch : t.menu.controls;
   const [collapsed, setCollapsed] = useState(false);
 
   const currentZoom = hud.userZoom ?? 1.0;
@@ -260,31 +263,31 @@ export const PauseOverlay: React.FC<PauseOverlayProps> = ({
           <div className="controls-pill-grid compact" data-testid="pause-controls-guide">
             <div className="control-guide-pill tone-cyan">
               <div className="control-pill-top">
-                <span className="control-lane-tag">{t.menu.controls.highTag}</span>
-                <strong>{t.menu.controls.highKey}</strong>
+                <span className="control-lane-tag">{ctrlGuide.highTag}</span>
+                <strong>{ctrlGuide.highKey}</strong>
               </div>
-              <small>{t.menu.controls.highDesc}</small>
+              <small>{ctrlGuide.highDesc}</small>
             </div>
             <div className="control-guide-pill tone-crimson">
               <div className="control-pill-top">
-                <span className="control-lane-tag">{t.menu.controls.lowTag}</span>
-                <strong>{t.menu.controls.lowKey}</strong>
+                <span className="control-lane-tag">{ctrlGuide.lowTag}</span>
+                <strong>{ctrlGuide.lowKey}</strong>
               </div>
-              <small>{t.menu.controls.lowDesc}</small>
+              <small>{ctrlGuide.lowDesc}</small>
             </div>
             <div className="control-guide-pill tone-gold">
               <div className="control-pill-top">
-                <span className="control-lane-tag">{t.menu.controls.chordTag}</span>
-                <strong>{t.menu.controls.chordKey}</strong>
+                <span className="control-lane-tag">{ctrlGuide.chordTag}</span>
+                <strong>{ctrlGuide.chordKey}</strong>
               </div>
-              <small>{t.menu.controls.chordDesc}</small>
+              <small>{ctrlGuide.chordDesc}</small>
             </div>
             <div className="control-guide-pill tone-neutral">
               <div className="control-pill-top">
-                <span className="control-lane-tag">{t.menu.controls.utilTag}</span>
-                <strong>{t.menu.controls.utilKey}</strong>
+                <span className="control-lane-tag">{ctrlGuide.utilTag}</span>
+                <strong>{ctrlGuide.utilKey}</strong>
               </div>
-              <small>{t.menu.controls.utilDesc}</small>
+              <small>{ctrlGuide.utilDesc}</small>
             </div>
           </div>
         </div>

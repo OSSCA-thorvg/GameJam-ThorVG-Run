@@ -1,4 +1,5 @@
 import React from 'react';
+import { useCoarsePointer } from '../hooks/useCoarsePointer';
 import { resolveBanner } from '../i18n/display';
 import { useI18n } from '../i18n/I18nProvider';
 import {
@@ -32,6 +33,7 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
   onActivateOverdrive,
 }) => {
   const { t, format } = useI18n();
+  const isCoarsePointer = useCoarsePointer();
   const formCfg = FORM_CONFIG[hud.activeForm];
   const formText = t.forms[hud.activeForm];
   const progressPct = Math.min(100, Math.max(0, Math.round(hud.progress * 100)));
@@ -108,139 +110,141 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
 
   return (
     <div className="hud-overlay">
-      {/* Top-left: renderer badge, difficulty, FPS, speed, accuracy, slashed targets, stars, NO MISS */}
-      <div className="hud-top-left" data-ui-panel="true">
-        <div className="hud-badge-row">
-          <span className={`renderer-badge ${hud.rendererMode === 'gl' ? 'gpu' : 'cpu'}`}>
-            {hud.rendererMode === 'sw' ? t.hud.modeCpu : t.hud.modeGpu}
-          </span>
-          <span className={`diff-badge ${diffMode}`}>{t.difficulties[diffMode].name}</span>
-          <span className="fps-badge">FPS: {hud.fps}</span>
-          <span className="surf-badge">{format(t.hud.surfSpeed, { speed: surfSpeed })}</span>
-          <span className="acc-badge">{format(t.hud.accuracy, { value: accuracyText })}</span>
-          <span className="orbs-badge">
-            {format(t.hud.orbs, { collected: orbsCollected, total: totalOrbs })}
-          </span>
-          <span className="stars-badge">
-            {format(t.hud.stars, { collected: starsCollected, total: totalStars })}
-          </span>
-          {isNoMiss && <span className="nomiss-badge">{t.hud.noMissLive}</span>}
-        </div>
-        <div className="hud-sub-status">
-          <span>
-            {t.hud.styleLabel}:{' '}
-            <strong style={{ color: formCfg.colorHex }}>{formText.name}</strong>
-          </span>
-          <span
-            className={`cine-zoom-readout${hud.cinematicCamera ? ' active' : ''}`}
-            data-testid="hud-effective-zoom"
-          >
-            {hud.cinematicCamera ? '🎬' : 'ZOOM:'} <strong>{zoomDisplayText}x</strong>
-          </span>
-          <span className="pure-audio-pill">🎵 {t.hud.pureAudio}</span>
-          <span className={`section-pill ${intensity}`}>{sectionLabel}</span>
-        </div>
-      </div>
-
-      {/* Top-right: score, uncapped combo, track progress, live SFX mode, zoom & pause controls */}
-      <div className="hud-top-right" data-ui-panel="true">
-        <div className="score-row">
-          <div className="score-box">
-            <small>{t.hud.score}</small>
-            <strong>{hud.score.toLocaleString()}</strong>
+      <div className="hud-top-bar">
+        {/* Top-left: renderer badge, difficulty, FPS, speed, accuracy, slashed targets, stars, NO MISS */}
+        <div className="hud-top-left" data-ui-panel="true">
+          <div className="hud-badge-row">
+            <span className={`renderer-badge ${hud.rendererMode === 'gl' ? 'gpu' : 'cpu'}`}>
+              {hud.rendererMode === 'sw' ? t.hud.modeCpu : t.hud.modeGpu}
+            </span>
+            <span className={`diff-badge ${diffMode}`}>{t.difficulties[diffMode].name}</span>
+            <span className="fps-badge">FPS: {hud.fps}</span>
+            <span className="surf-badge">{format(t.hud.surfSpeed, { speed: surfSpeed })}</span>
+            <span className="acc-badge">{format(t.hud.accuracy, { value: accuracyText })}</span>
+            <span className="orbs-badge">
+              {format(t.hud.orbs, { collected: orbsCollected, total: totalOrbs })}
+            </span>
+            <span className="stars-badge">
+              {format(t.hud.stars, { collected: starsCollected, total: totalStars })}
+            </span>
+            {isNoMiss && <span className="nomiss-badge">{t.hud.noMissLive}</span>}
           </div>
-          <div className="combo-box">
-            <small>{t.hud.combo}</small>
-            <strong
-              style={{
-                color: hud.overdriveActive ? '#FFE600' : formCfg.colorHex,
-              }}
+          <div className="hud-sub-status">
+            <span>
+              {t.hud.styleLabel}:{' '}
+              <strong style={{ color: formCfg.colorHex }}>{formText.name}</strong>
+            </span>
+            <span
+              className={`cine-zoom-readout${hud.cinematicCamera ? ' active' : ''}`}
+              data-testid="hud-effective-zoom"
             >
-              x{hud.combo}
-            </strong>
+              {hud.cinematicCamera ? '🎬' : 'ZOOM:'} <strong>{zoomDisplayText}x</strong>
+            </span>
+            <span className="pure-audio-pill">🎵 {t.hud.pureAudio}</span>
+            <span className={`section-pill ${intensity}`}>{sectionLabel}</span>
           </div>
         </div>
 
-        <div className="progress-container">
-          <div className="progress-labels">
-            <span>🎵 {trackTitle}</span>
-            <span>{progressPct}%</span>
+        {/* Top-right: score, uncapped combo, track progress, live SFX mode, zoom & pause controls */}
+        <div className="hud-top-right" data-ui-panel="true">
+          <div className="score-row">
+            <div className="score-box">
+              <small>{t.hud.score}</small>
+              <strong>{hud.score.toLocaleString()}</strong>
+            </div>
+            <div className="combo-box">
+              <small>{t.hud.combo}</small>
+              <strong
+                style={{
+                  color: hud.overdriveActive ? '#FFE600' : formCfg.colorHex,
+                }}
+              >
+                x{hud.combo}
+              </strong>
+            </div>
           </div>
-          <div className="progress-track">
-            <div
-              className="progress-fill"
-              style={{ width: `${progressPct}%`, backgroundColor: formCfg.colorHex }}
-            />
+
+          <div className="progress-container">
+            <div className="progress-labels">
+              <span>🎵 {trackTitle}</span>
+              <span>{progressPct}%</span>
+            </div>
+            <div className="progress-track">
+              <div
+                className="progress-fill"
+                style={{ width: `${progressPct}%`, backgroundColor: formCfg.colorHex }}
+              />
+            </div>
           </div>
-        </div>
 
-        <div className="hud-actions-row">
+          <div className="hud-actions-row">
+            <button
+              type="button"
+              data-testid="sfx-mode-btn"
+              className={`hud-btn sfx-mode-btn sfx-${sfxMode}`}
+              onClick={onCycleSfxMode}
+            >
+              {sfxLabel}
+            </button>
+            <button
+              type="button"
+              className="hud-btn"
+              onClick={() => onToggleRendererInGame(hud.rendererMode === 'sw' ? 'gl' : 'sw')}
+            >
+              {hud.rendererMode === 'sw' ? t.hud.toGpu : t.hud.toCpu}
+            </button>
+          </div>
+
+          <div className="hud-zoom-bar" data-ui-panel="true">
+            <button
+              type="button"
+              data-testid="hud-zoom-out"
+              className="hud-btn hud-zoom-step-btn"
+              title={t.hud.zoomOutTitle}
+              onClick={() => onStepZoom(1 / 1.25)}
+            >
+              −
+            </button>
+            <span className="hud-zoom-value" data-testid="hud-zoom-value">
+              🔍 {userZoomText}x
+            </span>
+            <button
+              type="button"
+              data-testid="hud-zoom-in"
+              className="hud-btn hud-zoom-step-btn"
+              title={t.hud.zoomInTitle}
+              onClick={() => onStepZoom(1.25)}
+            >
+              +
+            </button>
+            <button
+              type="button"
+              data-testid="hud-zoom-reset"
+              className={`hud-btn hud-zoom-reset-btn${isZoomDefault ? ' is-default' : ''}`}
+              onClick={onResetZoom}
+            >
+              {t.hud.zoomReset}
+            </button>
+            <button
+              type="button"
+              data-testid="hud-cinematic-btn"
+              className={`hud-btn hud-cinematic-btn${hud.cinematicCamera ? ' active' : ''}`}
+              title={t.hud.cinematicTitle}
+              onClick={onToggleCinematicCamera}
+            >
+              {hud.cinematicCamera ? t.hud.cinematicAuto : t.hud.cinematicFixed}
+            </button>
+          </div>
+
           <button
             type="button"
-            data-testid="sfx-mode-btn"
-            className={`hud-btn sfx-mode-btn sfx-${sfxMode}`}
-            onClick={onCycleSfxMode}
+            data-testid="hud-pause-btn"
+            className="hud-btn pause-trigger-btn"
+            onClick={onPause}
           >
-            {sfxLabel}
-          </button>
-          <button
-            type="button"
-            className="hud-btn"
-            onClick={() => onToggleRendererInGame(hud.rendererMode === 'sw' ? 'gl' : 'sw')}
-          >
-            {hud.rendererMode === 'sw' ? t.hud.toGpu : t.hud.toCpu}
+            {isCoarsePointer ? t.hud.pauseTouchBtn : t.hud.pauseBtn}
           </button>
         </div>
-
-        <div className="hud-zoom-bar" data-ui-panel="true">
-          <button
-            type="button"
-            data-testid="hud-zoom-out"
-            className="hud-btn hud-zoom-step-btn"
-            title={t.hud.zoomOutTitle}
-            onClick={() => onStepZoom(1 / 1.25)}
-          >
-            −
-          </button>
-          <span className="hud-zoom-value" data-testid="hud-zoom-value">
-            🔍 {userZoomText}x
-          </span>
-          <button
-            type="button"
-            data-testid="hud-zoom-in"
-            className="hud-btn hud-zoom-step-btn"
-            title={t.hud.zoomInTitle}
-            onClick={() => onStepZoom(1.25)}
-          >
-            +
-          </button>
-          <button
-            type="button"
-            data-testid="hud-zoom-reset"
-            className={`hud-btn hud-zoom-reset-btn${isZoomDefault ? ' is-default' : ''}`}
-            onClick={onResetZoom}
-          >
-            {t.hud.zoomReset}
-          </button>
-          <button
-            type="button"
-            data-testid="hud-cinematic-btn"
-            className={`hud-btn hud-cinematic-btn${hud.cinematicCamera ? ' active' : ''}`}
-            title={t.hud.cinematicTitle}
-            onClick={onToggleCinematicCamera}
-          >
-            {hud.cinematicCamera ? t.hud.cinematicAuto : t.hud.cinematicFixed}
-          </button>
-        </div>
-
-        <button
-          type="button"
-          data-testid="hud-pause-btn"
-          className="hud-btn pause-trigger-btn"
-          onClick={onPause}
-        >
-          {t.hud.pauseBtn}
-        </button>
       </div>
 
       {/* Live Rush Lock-On Counter Badge */}
@@ -290,103 +294,114 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
         </div>
       )}
 
-      {/* Bottom Live 2-Lane Keycap Receptor (`pointer-events: none` for 0ms canvas click-through) */}
-      <div className="hud-lane-keys" data-testid="hud-lane-keys" aria-hidden="true">
-        <div
-          data-testid="hud-key-high"
-          className={`hud-keycap keycap-high${highLit ? ' is-lit' : ''}${hud.highKeyFlash ? ' is-flash' : ''}`}
-        >
-          <kbd>[{t.hud.laneHighKey}]</kbd>
-          <span>{t.hud.laneHighLabel}</span>
-        </div>
-        <div
-          data-testid="hud-key-chord"
-          className={`hud-keycap keycap-chord${chordLit ? ' is-lit is-flash' : ''}`}
-        >
-          <kbd>[{t.hud.laneChordKey}]</kbd>
-          <span>{t.hud.laneChordLabel}</span>
-        </div>
-        <div
-          data-testid="hud-key-low"
-          className={`hud-keycap keycap-low${lowLit ? ' is-lit' : ''}${hud.lowKeyFlash ? ' is-flash' : ''}`}
-        >
-          <kbd>[{t.hud.laneLowKey}]</kbd>
-          <span>{t.hud.laneLowLabel}</span>
-        </div>
-      </div>
-
-      {/* Bottom-center: Overdrive trigger, Groove HP / Chill status, Katana style & Resonance bar */}
-      <div className="hud-bottom-center" data-ui-panel="true">
-        {hud.overdriveReady && (
+      <div className="hud-bottom-stack">
+        {/* Bottom Live 2-Lane Keycap Receptor (`[data-slash-lane]` handled at 0ms by InputController) */}
+        <div className="hud-lane-keys" data-testid="hud-lane-keys">
           <button
             type="button"
-            data-testid="overdrive-btn"
-            className="overdrive-ready-btn"
-            onClick={onActivateOverdrive}
+            tabIndex={-1}
+            data-testid="hud-key-high"
+            data-slash-lane="high"
+            className={`hud-keycap keycap-high${highLit ? ' is-lit' : ''}${hud.highKeyFlash ? ' is-flash' : ''}`}
           >
-            {t.hud.overdriveReadyBtn}
+            <kbd>{isCoarsePointer ? t.hud.laneHighTouchKey : `[${t.hud.laneHighKey}]`}</kbd>
+            <span>{t.hud.laneHighLabel}</span>
           </button>
-        )}
-
-        {diffMode === 'easy' ? (
-          <div className="groove-hp-row chill" data-testid="hud-chill-pill">
-            <span>{t.hud.chillNoFail}</span>
-          </div>
-        ) : (
-          <div
-            className={`groove-hp-row${isDanger ? ' danger' : ''}`}
-            data-testid="hud-groove-hp"
+          <button
+            type="button"
+            tabIndex={-1}
+            data-testid="hud-key-chord"
+            data-slash-lane="chord"
+            className={`hud-keycap keycap-chord${chordLit ? ' is-lit is-flash' : ''}`}
           >
-            <div className="groove-hp-header">
-              <strong>{format(t.hud.grooveHp, { hp: hpPct })}</strong>
-              {isDanger && <span className="groove-danger-tag">{t.hud.grooveDangerTag}</span>}
+            <kbd>{isCoarsePointer ? t.hud.laneChordTouchKey : `[${t.hud.laneChordKey}]`}</kbd>
+            <span>{t.hud.laneChordLabel}</span>
+          </button>
+          <button
+            type="button"
+            tabIndex={-1}
+            data-testid="hud-key-low"
+            data-slash-lane="low"
+            className={`hud-keycap keycap-low${lowLit ? ' is-lit' : ''}${hud.lowKeyFlash ? ' is-flash' : ''}`}
+          >
+            <kbd>{isCoarsePointer ? t.hud.laneLowTouchKey : `[${t.hud.laneLowKey}]`}</kbd>
+            <span>{t.hud.laneLowLabel}</span>
+          </button>
+        </div>
+
+        {/* Bottom-center: Overdrive trigger, Groove HP / Chill status, Katana style & Resonance bar */}
+        <div className="hud-bottom-center" data-ui-panel="true">
+          {hud.overdriveReady && (
+            <button
+              type="button"
+              data-testid="overdrive-btn"
+              className="overdrive-ready-btn"
+              onClick={onActivateOverdrive}
+            >
+              {isCoarsePointer ? t.hud.overdriveReadyTouchBtn : t.hud.overdriveReadyBtn}
+            </button>
+          )}
+
+          {diffMode === 'easy' ? (
+            <div className="groove-hp-row chill" data-testid="hud-chill-pill">
+              <span>{t.hud.chillNoFail}</span>
             </div>
-            <div className="groove-hp-bar-bg">
+          ) : (
+            <div
+              className={`groove-hp-row${isDanger ? ' danger' : ''}`}
+              data-testid="hud-groove-hp"
+            >
+              <div className="groove-hp-header">
+                <strong>{format(t.hud.grooveHp, { hp: hpPct })}</strong>
+                {isDanger && <span className="groove-danger-tag">{t.hud.grooveDangerTag}</span>}
+              </div>
+              <div className="groove-hp-bar-bg">
+                <div
+                  className={`groove-hp-bar-fill ${hpTierClass}`}
+                  style={{ width: `${hpPct}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="gauge-wrapper">
+            <div className="gauge-header">
+              <div className="gauge-style-skill">
+                <strong
+                  className="hud-style-name"
+                  style={{ color: hud.overdriveActive ? '#FFE600' : formCfg.colorHex }}
+                >
+                  ◆ {formText.name}
+                </strong>
+                <span
+                  data-testid="hud-skill-status"
+                  className={`hud-skill-pill ${isSkillCoolingDown ? 'cooldown' : 'ready'}`}
+                  style={
+                    !isSkillCoolingDown
+                      ? {
+                          borderColor: `${formCfg.colorHex}88`,
+                          color: formCfg.colorHex,
+                          backgroundColor: `${formCfg.colorHex}1F`,
+                        }
+                      : undefined
+                  }
+                >
+                  {skillStatusLabel}
+                </span>
+              </div>
+              <strong className={hud.overdriveReady || hud.overdriveActive ? 'gauge-text-hot' : ''}>
+                {gaugeLabel}
+              </strong>
+            </div>
+            <div className="gauge-bar-bg">
               <div
-                className={`groove-hp-bar-fill ${hpTierClass}`}
-                style={{ width: `${hpPct}%` }}
+                className={`gauge-bar-fill ${hud.overdriveActive ? 'overdrive-active' : hud.overdriveReady ? 'overdrive-ready' : ''}`}
+                style={{
+                  width: `${displayGauge}%`,
+                  backgroundColor: hud.overdriveActive ? undefined : formCfg.colorHex,
+                }}
               />
             </div>
-          </div>
-        )}
-
-        <div className="gauge-wrapper">
-          <div className="gauge-header">
-            <div className="gauge-style-skill">
-              <strong
-                className="hud-style-name"
-                style={{ color: hud.overdriveActive ? '#FFE600' : formCfg.colorHex }}
-              >
-                ◆ {formText.name}
-              </strong>
-              <span
-                data-testid="hud-skill-status"
-                className={`hud-skill-pill ${isSkillCoolingDown ? 'cooldown' : 'ready'}`}
-                style={
-                  !isSkillCoolingDown
-                    ? {
-                        borderColor: `${formCfg.colorHex}88`,
-                        color: formCfg.colorHex,
-                        backgroundColor: `${formCfg.colorHex}1F`,
-                      }
-                    : undefined
-                }
-              >
-                {skillStatusLabel}
-              </span>
-            </div>
-            <strong className={hud.overdriveReady || hud.overdriveActive ? 'gauge-text-hot' : ''}>
-              {gaugeLabel}
-            </strong>
-          </div>
-          <div className="gauge-bar-bg">
-            <div
-              className={`gauge-bar-fill ${hud.overdriveActive ? 'overdrive-active' : hud.overdriveReady ? 'overdrive-ready' : ''}`}
-              style={{
-                width: `${displayGauge}%`,
-                backgroundColor: hud.overdriveActive ? undefined : formCfg.colorHex,
-              }}
-            />
           </div>
         </div>
       </div>

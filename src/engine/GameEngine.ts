@@ -33,7 +33,7 @@ export const PLAYER_HIT_X_RATIO = RETICLE_X_RATIO;
 const OVERDRIVE_DURATION_SEC = 8.0;
 const HUD_PUBLISH_INTERVAL_SEC = 0.05; // 20Hz steady telemetry + 0ms instant flush on discrete dirty events
 const KEY_FLASH_DURATION_SEC = 0.09;
-const LIVE_MIN_ZOOM = 0.4;
+const LIVE_MIN_ZOOM = 0.35;
 const LIVE_MAX_ZOOM = 4.0;
 const PAUSED_MIN_ZOOM = 0.2;
 const PAUSED_MAX_ZOOM = 20.0;
@@ -67,6 +67,7 @@ export class GameEngine {
   private activeBlueprint: TrackBlueprint | null = null;
   private currentTrackMeta: TrackMetadata | null = null;
   private finishRecorded: boolean = false;
+  private finishedAudioSec: number = 0;
   private lastIsNewRecord: boolean = false;
   private lastScoreDelta: number = 0;
 
@@ -178,15 +179,43 @@ export class GameEngine {
     width: number,
     height: number
   ): void {
+    const sizeChanged = width !== this.width || height !== this.height;
     this.renderer = renderer;
     this.rendererMode = mode;
     this.width = width;
     this.height = height;
+    this.terrain.setViewportSize(width, height);
+    if (sizeChanged) {
+      this.realignPlayerToCurrentLane();
+    }
     this.hudDirty = true;
     if (this.running && this.paused) {
+      if (this.cinematicCamera) {
+        this.cinematicZoom = this.computeTargetCinematicZoom(this.pausedAudioSec);
+      }
       this.cameraX = this.pausedAudioSec * this.baseSpeed - this.getReticleScreenX();
-      this.clampPausedPan();
+      this.prevRenderCameraX = this.cameraX;
+      if (!this.hasManualPan) {
+        this.applyNeutralPausedFraming(this.userZoom);
+      } else {
+        this.clampPausedPan();
+      }
       this.refreshPausedView(true);
+    } else if (!this.running && this.finishRecorded && this.activeBlueprint) {
+      if (this.cinematicCamera) {
+        this.cinematicZoom = this.computeTargetCinematicZoom(this.finishedAudioSec);
+      }
+      this.cameraX = this.finishedAudioSec * this.baseSpeed - this.getReticleScreenX();
+      this.prevRenderCameraX = this.cameraX;
+      this.terrain.update(
+        this.cameraX,
+        this.width,
+        this.height,
+        this.elapsedSec,
+        this.pausedFreq,
+        this.computeViewWorldBounds(true)
+      );
+      this.renderCurrentState(this.finishedAudioSec, this.pausedFreq);
     }
   }
 
@@ -352,14 +381,69 @@ export class GameEngine {
     }
   }
 
+  private realignPlayerToCurrentLane(): void {
+    const highY = this.terrain.getLaneHighScreenY();
+    const lowY = this.terrain.getLaneLowScreenY();
+    const alignedY =
+      this.chordPoseTimer > 0
+        ? (highY + lowY) * 0.5
+        : this.playerLane === 'high'
+          ? highY
+          : lowY;
+    this.playerY = alignedY;
+    this.hitstopFreezePlayerY = alignedY;
+  }
+
   public resize(width: number, height: number): void {
+    if (width === this.width && height === this.height) return;
     this.width = width;
     this.height = height;
+    this.terrain.setViewportSize(width, height);
     this.renderer?.resize(width, height);
+    this.realignPlayerToCurrentLane();
+    this.hudDirty = true;
+
     if (this.running && this.paused) {
+      if (this.cinematicCamera) {
+        this.cinematicZoom = this.computeTargetCinematicZoom(this.pausedAudioSec);
+      }
       this.cameraX = this.pausedAudioSec * this.baseSpeed - this.getReticleScreenX();
-      this.clampPausedPan();
+      this.prevRenderCameraX = this.cameraX;
+      if (!this.hasManualPan) {
+        this.applyNeutralPausedFraming(this.userZoom);
+      } else {
+        this.clampPausedPan();
+      }
       this.refreshPausedView(true);
+    } else if (!this.running && this.finishRecorded && this.activeBlueprint) {
+      if (this.cinematicCamera) {
+        this.cinematicZoom = this.computeTargetCinematicZoom(this.finishedAudioSec);
+      }
+      this.cameraX = this.finishedAudioSec * this.baseSpeed - this.getReticleScreenX();
+      this.prevRenderCameraX = this.cameraX;
+      this.terrain.update(
+        this.cameraX,
+        this.width,
+        this.height,
+        this.elapsedSec,
+        this.pausedFreq,
+        this.computeViewWorldBounds(true)
+      );
+      this.renderCurrentState(this.finishedAudioSec, this.pausedFreq);
+    } else if (this.running && !this.paused) {
+      const effectiveAudioSec = this.audio.getEffectiveElapsedSec();
+      this.cameraX = effectiveAudioSec * this.baseSpeed - this.getReticleScreenX();
+      this.prevRenderCameraX = this.cameraX;
+      const freq = this.audio.getFrequencyData();
+      this.terrain.update(
+        this.cameraX,
+        this.width,
+        this.height,
+        this.elapsedSec,
+        freq,
+        this.computeViewWorldBounds(true)
+      );
+      this.renderCurrentState(effectiveAudioSec, freq);
     }
   }
 
@@ -429,6 +513,8 @@ export class GameEngine {
     this.running = false;
     this.paused = false;
     this.pauseSeq++;
+    this.finishRecorded = false;
+    this.finishedAudioSec = 0;
     this.userZoom = 1.0;
     this.savedLiveZoom = 1.0;
     this.panX = 0;
@@ -451,7 +537,28 @@ export class GameEngine {
   }
 
   public getReticleScreenX(): number {
-    return this.width * RETICLE_X_RATIO;
+    if (this.width >= 768) {
+      return this.width * RETICLE_X_RATIO;
+    }
+    const t = Math.max(0, Math.min(1, (this.width - 360) / (768 - 360)));
+    const ratio = 0.2 + 0.05 * t;
+    return this.width * ratio;
+  }
+
+  /** Returns normalized [0..1] screen Y midpoint between 2F HIGH and 1F LOW lanes for spatial touch split. */
+  public getTouchSplitYRatio(): number {
+    const midY =
+      (this.terrain.getLaneHighScreenY() + this.terrain.getLaneLowScreenY()) * 0.5;
+    return Math.max(0.42, Math.min(0.68, midY / Math.max(1, this.height)));
+  }
+
+  private getResponsiveViewportZoom(): number {
+    if (this.width >= 1024 && this.height >= 560) {
+      return 1.0;
+    }
+    const widthScale = Math.min(1.0, Math.max(0.58, this.width / 960));
+    const heightScale = Math.min(1.0, Math.max(0.76, this.height / 540));
+    return Math.min(widthScale, heightScale);
   }
 
   private getPlayerRenderScreenX(): number {
@@ -485,7 +592,7 @@ export class GameEngine {
       lookaheadIntensity === 'calm' &&
       this.overdriveTimer <= 0
     ) {
-      return 1.24;
+      return this.width < 768 ? 1.08 : 1.24;
     }
     return 1.0;
   }
@@ -498,10 +605,15 @@ export class GameEngine {
           ? 0.042
           : 0.026;
     const beatAdd = this.beatPulse * punchScale;
-    return Math.max(
+    const rawPhaseZoom = Math.max(
       0.55,
       Math.min(2.2, this.cinematicZoom * (1.0 + beatAdd + this.impactZoomPunch))
     );
+    const viewportScale = this.getResponsiveViewportZoom();
+    if (viewportScale >= 1.0) {
+      return rawPhaseZoom;
+    }
+    return Math.max(0.42, Math.min(2.2, rawPhaseZoom * viewportScale));
   }
 
   private getEffectiveZoomScale(): number {
@@ -814,6 +926,7 @@ export class GameEngine {
     this.hudPublishAccum = 0;
     this.hudDirty = true;
     this.finishRecorded = false;
+    this.finishedAudioSec = 0;
     this.lastIsNewRecord = false;
     this.lastScoreDelta = 0;
     this.cinematicZoom = 1.0;
@@ -833,6 +946,14 @@ export class GameEngine {
     const initialEffectiveSec = this.audio.getEffectiveElapsedSec();
     this.cameraX = initialEffectiveSec * this.baseSpeed - this.getReticleScreenX();
     this.prevRenderCameraX = this.cameraX;
+    this.terrain.update(
+      this.cameraX,
+      this.width,
+      this.height,
+      0,
+      this.audio.getFrequencyData(),
+      this.computeViewWorldBounds(true)
+    );
     this.hitstopTimer = 0;
     this.hitstopCooldownTimer = 0;
 
@@ -1516,6 +1637,8 @@ export class GameEngine {
     const failProgress = this.audio.getProgress();
     this.isFailed = true;
     this.finishRecorded = true;
+    this.finishedAudioSec = audioSec;
+    this.pausedFreq = freq;
     this.running = false;
     this.paused = false;
     this.laneHighHeld = false;
@@ -1745,6 +1868,8 @@ export class GameEngine {
       !this.paused && (progress >= 0.995 || (!this.audio.playing && this.elapsedSec > 2.0));
     if (isFinished) {
       this.running = false;
+      this.finishedAudioSec = effectiveAudioSec;
+      this.pausedFreq = freq;
       if (!this.finishRecorded && !this.isFailed) {
         this.finishRecorded = true;
         const { accuracy, rank } = this.scoreJudge.computeAccuracyAndRank();
@@ -2069,7 +2194,8 @@ export class GameEngine {
       this.playerY += (targetY - this.playerY) * Math.min(1, dt * 26);
       this.playerRotation += (-0.08 - this.playerRotation) * Math.min(1, dt * 14);
     } else {
-      const groundTargetY = Math.min(lowY, floorY - this.playerRadius);
+      const scaledPlayerOffset = this.terrain.getFloorScreenY() - lowY;
+      const groundTargetY = Math.min(lowY, floorY - scaledPlayerOffset);
       this.playerY += (groundTargetY - this.playerY) * Math.min(1, dt * 28);
       this.playerRotation += (angleRad - this.playerRotation) * Math.min(1, dt * 16);
 

@@ -147,7 +147,7 @@ export function renderMacroWorldPass(
 
   const railTickStep = 136;
   const firstTickWx = Math.floor(visMinWx / railTickStep) * railTickStep;
-  for (let wx = firstTickWx, idx = 0; wx <= visMaxWx && idx < 96; wx += railTickStep, idx++) {
+  for (let wx = firstTickWx, idx = 0; wx <= visMaxWx && idx < 256; wx += railTickStep, idx++) {
     const sx = tx(wx - cameraX);
     if (sx < -24 || sx > width + 24) continue;
     const isMajor = Math.abs(Math.round(wx / railTickStep)) % 4 === 0;

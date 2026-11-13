@@ -50,16 +50,23 @@ export function renderMenuPreviewPass(
   const formCfg = FORM_CONFIG[previewForm];
   const [r, g, b] = formCfg.rgb;
 
-  // Unobstructed left-gutter preview anchor (at 1280x720: cardWidth=880, leftGutter=200 -> playerX=102, reticleX=148)
+  const isTopBannerStage = width <= 960 && height >= 700;
+
+  // Unobstructed left-gutter preview anchor on desktop (at 1280x720: cardWidth=880, leftGutter=200 -> playerX=102, reticleX=148)
+  // On mobile/tablet portrait (`width <= 960 && height >= 700`), renders a self-contained top-banner 2-Lane stage in `y = 0..152`
   const cardWidth = Math.min(width - 40, 880);
   const leftGutter = Math.max(0, (width - cardWidth) * 0.5);
-  const basePlayerX =
-    leftGutter >= 140 ? Math.min(width * 0.22, leftGutter * 0.51) : width * 0.20;
-  const reticleX = basePlayerX + 46;
+  const basePlayerX = isTopBannerStage
+    ? Math.max(54, width * 0.20)
+    : leftGutter >= 140
+      ? Math.min(width * 0.22, leftGutter * 0.51)
+      : width * 0.20;
+  const reticleX = isTopBannerStage ? basePlayerX + 42 : basePlayerX + 46;
 
-  const laneHighY = height * 0.45;
-  const laneLowY = height * 0.69;
-  const floorY = laneLowY + 22;
+  const laneHighY = isTopBannerStage ? 50 : height * 0.45;
+  const laneLowY = isTopBannerStage ? 104 : height * 0.69;
+  const floorY = isTopBannerStage ? 120 : laneLowY + 22;
+  const deckBottomY = isTopBannerStage ? 152 : height;
 
   // 1. Deep cyber background
   shapes.bg.reset().appendRect(0, 0, width, height).fill(9, 11, 22, 255);
@@ -70,9 +77,11 @@ export function renderMenuPreviewPass(
   const scrollPx = timeSec * speed;
   const scrollOffset = scrollPx % gridSpacing;
   for (let x = -scrollOffset; x <= width; x += gridSpacing) {
-    shapes.grid.moveTo(x, 0).lineTo(x, height);
+    shapes.grid.moveTo(x, 0).lineTo(x, deckBottomY);
   }
-  for (let y = 76; y < height; y += gridSpacing) {
+  const firstGridY = isTopBannerStage ? 28 : 76;
+  const gridStepY = isTopBannerStage ? 38 : gridSpacing;
+  for (let y = firstGridY; y < deckBottomY; y += gridStepY) {
     shapes.grid.moveTo(0, y).lineTo(width, y);
   }
   shapes.grid.stroke({ width: 1, color: [35, 55, 95, 98] });
@@ -109,10 +118,10 @@ export function renderMenuPreviewPass(
 
   // 4. Continuous 1F Neon Stage Deck + Equalizer Bars
   shapes.waveFill
-    .moveTo(0, height)
+    .moveTo(0, deckBottomY)
     .lineTo(0, floorY)
     .lineTo(width, floorY)
-    .lineTo(width, height)
+    .lineTo(width, deckBottomY)
     .close()
     .fill(r, g, b, 38)
     .stroke({ width: 0, color: [0, 0, 0, 0] });
@@ -127,8 +136,10 @@ export function renderMenuPreviewPass(
       const barW = specTileW * 0.19;
       const bx = x0 + (bIdx + 0.22) * (specTileW / 3);
       const eq = 0.28 + 0.50 * Math.abs(Math.sin(timeSec * 5.4 + tileIdx * 0.85 + bIdx));
-      const bh = Math.max(16, (height - floorY - 14) * eq);
-      shapes.spectrum.appendRect(bx, height - bh, barW, bh, { rx: 2, ry: 2 });
+      const bh = isTopBannerStage
+        ? Math.max(8, (deckBottomY - floorY - 4) * eq)
+        : Math.max(16, (height - floorY - 14) * eq);
+      shapes.spectrum.appendRect(bx, deckBottomY - bh, barW, bh, { rx: 2, ry: 2 });
     }
   }
   shapes.spectrum.fill(r, g, b, 64).stroke({ width: 1, color: [r, g, b, 95] });

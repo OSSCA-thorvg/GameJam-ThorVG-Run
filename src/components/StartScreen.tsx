@@ -10,6 +10,7 @@ import {
 } from '../audio/audioFormats';
 import { BUILT_IN_TRACKS } from '../audio/proceduralTracks';
 import { getTrackRecord } from '../engine/recordsStore';
+import { useCoarsePointer } from '../hooks/useCoarsePointer';
 import { trackArtist, trackTitle } from '../i18n/display';
 import { useI18n } from '../i18n/I18nProvider';
 import { LANGUAGE_LABELS, type Lang } from '../i18n/messages';
@@ -63,6 +64,8 @@ export const StartScreen: React.FC<StartScreenProps> = ({
   onStartRun,
 }) => {
   const { lang, setLang, t, format } = useI18n();
+  const isCoarsePointer = useCoarsePointer();
+  const ctrlGuide = isCoarsePointer ? t.menu.controlsTouch : t.menu.controls;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
@@ -397,6 +400,39 @@ export const StartScreen: React.FC<StartScreenProps> = ({
           </div>
         </section>
 
+        <div className="menu-controls-wrap">
+          <div className="controls-pill-grid" data-testid="menu-controls-guide">
+            <div className="control-guide-pill tone-cyan">
+              <div className="control-pill-top">
+                <span className="control-lane-tag">{ctrlGuide.highTag}</span>
+                <strong>{ctrlGuide.highKey}</strong>
+              </div>
+              <small>{ctrlGuide.highDesc}</small>
+            </div>
+            <div className="control-guide-pill tone-crimson">
+              <div className="control-pill-top">
+                <span className="control-lane-tag">{ctrlGuide.lowTag}</span>
+                <strong>{ctrlGuide.lowKey}</strong>
+              </div>
+              <small>{ctrlGuide.lowDesc}</small>
+            </div>
+            <div className="control-guide-pill tone-gold">
+              <div className="control-pill-top">
+                <span className="control-lane-tag">{ctrlGuide.chordTag}</span>
+                <strong>{ctrlGuide.chordKey}</strong>
+              </div>
+              <small>{ctrlGuide.chordDesc}</small>
+            </div>
+            <div className="control-guide-pill tone-neutral">
+              <div className="control-pill-top">
+                <span className="control-lane-tag">{ctrlGuide.utilTag}</span>
+                <strong>{ctrlGuide.utilKey}</strong>
+              </div>
+              <small>{ctrlGuide.utilDesc}</small>
+            </div>
+          </div>
+        </div>
+
         <footer className="start-footer">
           <button
             type="button"
@@ -406,36 +442,6 @@ export const StartScreen: React.FC<StartScreenProps> = ({
           >
             {engineReady ? t.menu.start : t.menu.initializing}
           </button>
-          <div className="controls-pill-grid" data-testid="menu-controls-guide">
-            <div className="control-guide-pill tone-cyan">
-              <div className="control-pill-top">
-                <span className="control-lane-tag">{t.menu.controls.highTag}</span>
-                <strong>{t.menu.controls.highKey}</strong>
-              </div>
-              <small>{t.menu.controls.highDesc}</small>
-            </div>
-            <div className="control-guide-pill tone-crimson">
-              <div className="control-pill-top">
-                <span className="control-lane-tag">{t.menu.controls.lowTag}</span>
-                <strong>{t.menu.controls.lowKey}</strong>
-              </div>
-              <small>{t.menu.controls.lowDesc}</small>
-            </div>
-            <div className="control-guide-pill tone-gold">
-              <div className="control-pill-top">
-                <span className="control-lane-tag">{t.menu.controls.chordTag}</span>
-                <strong>{t.menu.controls.chordKey}</strong>
-              </div>
-              <small>{t.menu.controls.chordDesc}</small>
-            </div>
-            <div className="control-guide-pill tone-neutral">
-              <div className="control-pill-top">
-                <span className="control-lane-tag">{t.menu.controls.utilTag}</span>
-                <strong>{t.menu.controls.utilKey}</strong>
-              </div>
-              <small>{t.menu.controls.utilDesc}</small>
-            </div>
-          </div>
         </footer>
       </div>
     </div>

@@ -76,6 +76,76 @@ export class BezierTerrain {
   private totalStars: number = 0;
   private hasBlueprint: boolean = false;
 
+  private computeLaneLayout(viewportHeight: number): {
+    scaleY: number;
+    highY: number;
+    lowY: number;
+    floorScreenY: number;
+  } {
+    const safeHeight = Math.max(1, viewportHeight);
+    const scaleY = safeHeight / this.refHeight;
+    if (safeHeight >= 560) {
+      return {
+        scaleY,
+        highY: this.refLaneHighY * scaleY,
+        lowY: this.refLaneLowY * scaleY,
+        floorScreenY: this.refFloorY * scaleY,
+      };
+    }
+
+    const t = Math.max(0, Math.min(1, (560 - safeHeight) / (560 - 360)));
+    const baseHighRatio = this.refLaneHighY / this.refHeight;
+    const baseLowRatio = this.refLaneLowY / this.refHeight;
+    const baseFloorRatio = this.refFloorY / this.refHeight;
+
+    const highRatio = baseHighRatio + (0.365 - baseHighRatio) * t;
+    const lowRatio = baseLowRatio + (0.735 - baseLowRatio) * t;
+    const floorRatio = baseFloorRatio + (0.78 - baseFloorRatio) * t;
+
+    return {
+      scaleY,
+      highY: safeHeight * highRatio,
+      lowY: safeHeight * lowRatio,
+      floorScreenY: safeHeight * floorRatio,
+    };
+  }
+
+  private resolveTargetScreenY(
+    target: Pick<BeatTarget, 'kind' | 'lane'>,
+    highY: number,
+    lowY: number
+  ): number {
+    if (target.kind === 'chord' || target.kind === 'rush') {
+      return (highY + lowY) * 0.5;
+    }
+    return target.lane === 'high' ? highY : lowY;
+  }
+
+  public setViewportSize(_viewportWidth: number, viewportHeight: number): void {
+    this.viewportHeight = viewportHeight;
+    if (this.baseSegments.length === 0 && this.allTargets.length === 0) {
+      return;
+    }
+
+    const { scaleY, highY, lowY, floorScreenY } = this.computeLaneLayout(viewportHeight);
+    for (let i = 0; i < this.allSegments.length; i++) {
+      const base = this.baseSegments[i];
+      const seg = this.allSegments[i];
+      if (!base || !seg) continue;
+      seg.y0 = floorScreenY + (base.y0 - this.refFloorY) * scaleY;
+      seg.cy1 = floorScreenY + (base.cy1 - this.refFloorY) * scaleY;
+      seg.cy2 = floorScreenY + (base.cy2 - this.refFloorY) * scaleY;
+      seg.y1 = floorScreenY + (base.y1 - this.refFloorY) * scaleY;
+    }
+
+    if (this.hasBlueprint) {
+      for (let i = 0; i < this.allTargets.length; i++) {
+        const t = this.allTargets[i]!;
+        t.screenY = this.resolveTargetScreenY(t, highY, lowY);
+      }
+    }
+  }
+
   public loadBlueprint(
     blueprint: TrackBlueprint,
     viewportWidth: number,
@@ -90,17 +160,17 @@ export class BezierTerrain {
     this.leadInSegments = blueprint.leadInSegments ?? LEAD_IN_SEGMENTS;
     this.hasBlueprint = true;
 
-    const scaleY = viewportHeight / this.refHeight;
+    const { scaleY, highY, lowY, floorScreenY } = this.computeLaneLayout(viewportHeight);
 
     this.baseSegments = blueprint.segments.map((s) => ({ ...s }));
     this.allSegments = blueprint.segments.map((s) => ({
       ...s,
-      y0: s.y0 * scaleY,
-      cx1: s.cx1 * scaleY,
-      cy1: s.cy1 * scaleY,
-      cx2: s.cx2 * scaleY,
-      cy2: s.cy2 * scaleY,
-      y1: s.y1 * scaleY,
+      y0: floorScreenY + (s.y0 - this.refFloorY) * scaleY,
+      cx1: s.cx1,
+      cy1: floorScreenY + (s.cy1 - this.refFloorY) * scaleY,
+      cx2: s.cx2,
+      cy2: floorScreenY + (s.cy2 - this.refFloorY) * scaleY,
+      y1: floorScreenY + (s.y1 - this.refFloorY) * scaleY,
     }));
 
     this.maxTargetSpan = 0;
@@ -116,7 +186,7 @@ export class BezierTerrain {
         return {
           ...t,
           baseY: t.worldY,
-          screenY: t.worldY * scaleY,
+          screenY: this.resolveTargetScreenY(t, highY, lowY),
           resolved: false,
           hitGrade: undefined,
           holdActive: false,
@@ -144,21 +214,21 @@ export class BezierTerrain {
 
   public reset(viewportWidth: number, viewportHeight: number): void {
     this.viewportHeight = viewportHeight;
-    const scaleY = viewportHeight / this.refHeight;
+    const { scaleY, highY, lowY, floorScreenY } = this.computeLaneLayout(viewportHeight);
 
     if (this.hasBlueprint && this.baseSegments.length > 0) {
       for (let i = 0; i < this.allSegments.length; i++) {
         const base = this.baseSegments[i]!;
         const seg = this.allSegments[i]!;
-        seg.y0 = base.y0 * scaleY;
-        seg.cy1 = base.cy1 * scaleY;
-        seg.cy2 = base.cy2 * scaleY;
-        seg.y1 = base.y1 * scaleY;
+        seg.y0 = floorScreenY + (base.y0 - this.refFloorY) * scaleY;
+        seg.cy1 = floorScreenY + (base.cy1 - this.refFloorY) * scaleY;
+        seg.cy2 = floorScreenY + (base.cy2 - this.refFloorY) * scaleY;
+        seg.y1 = floorScreenY + (base.y1 - this.refFloorY) * scaleY;
       }
 
       for (let i = 0; i < this.allTargets.length; i++) {
         const t = this.allTargets[i]!;
-        t.screenY = t.baseY * scaleY;
+        t.screenY = this.resolveTargetScreenY(t, highY, lowY);
         t.resolved = false;
         t.hitGrade = undefined;
         t.holdActive = false;
@@ -185,7 +255,7 @@ export class BezierTerrain {
     this.allSegments = [];
     this.allTargets = [];
     this.leadInSegments = 4;
-    const baseFloor = this.refFloorY * scaleY;
+    const baseFloor = floorScreenY;
 
     for (let i = -this.leadInSegments; i < 40; i++) {
       const x0 = i * this.segWidth;
@@ -230,7 +300,7 @@ export class BezierTerrain {
     viewWorldBounds?: { minX: number; maxX: number }
   ): void {
     this.viewportHeight = viewportHeight;
-    const scaleY = viewportHeight / this.refHeight;
+    const { scaleY, highY, lowY, floorScreenY } = this.computeLaneLayout(viewportHeight);
     const physMinX = cameraX - this.segWidth * 2;
     const physMaxX = cameraX + viewportWidth + this.segWidth * 4;
     const minX = viewWorldBounds ? viewWorldBounds.minX : physMinX;
@@ -256,10 +326,10 @@ export class BezierTerrain {
           ? freq.low * 4.2 * scaleY
           : 0;
 
-      seg.y0 = base.y0 * scaleY;
-      seg.y1 = base.y1 * scaleY;
-      seg.cy1 = base.cy1 * scaleY - segPulse;
-      seg.cy2 = base.cy2 * scaleY - segPulse;
+      seg.y0 = floorScreenY + (base.y0 - this.refFloorY) * scaleY;
+      seg.y1 = floorScreenY + (base.y1 - this.refFloorY) * scaleY;
+      seg.cy1 = floorScreenY + (base.cy1 - this.refFloorY) * scaleY - segPulse;
+      seg.cy2 = floorScreenY + (base.cy2 - this.refFloorY) * scaleY - segPulse;
       this.visibleSegments.push(seg);
     }
 
@@ -276,21 +346,21 @@ export class BezierTerrain {
       const targetEndX = target.endWorldX ?? target.worldX;
       if (targetEndX < minX - 180) continue;
 
-      target.screenY = target.baseY * scaleY;
+      target.screenY = this.resolveTargetScreenY(target, highY, lowY);
       this.visibleTargets.push(target);
     }
   }
 
   public getLaneHighScreenY(): number {
-    return this.refLaneHighY * (this.viewportHeight / this.refHeight);
+    return this.computeLaneLayout(this.viewportHeight).highY;
   }
 
   public getLaneLowScreenY(): number {
-    return this.refLaneLowY * (this.viewportHeight / this.refHeight);
+    return this.computeLaneLayout(this.viewportHeight).lowY;
   }
 
   public getFloorScreenY(): number {
-    return this.refFloorY * (this.viewportHeight / this.refHeight);
+    return this.computeLaneLayout(this.viewportHeight).floorScreenY;
   }
 
   public sampleFloor(worldX: number): {

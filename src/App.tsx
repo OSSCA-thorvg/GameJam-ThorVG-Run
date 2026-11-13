@@ -139,6 +139,17 @@ export const App: React.FC = () => {
   const rendererRef = useRef<ThorVGRenderer | null>(null);
   const audioRef = useRef<AudioEngine | null>(null);
   const gameEngineRef = useRef<GameEngine | null>(null);
+  const lastSizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
+
+  const measureViewportSize = useCallback((): { w: number; h: number } => {
+    const shell = shellRef.current;
+    const rawW = shell && shell.clientWidth > 0 ? shell.clientWidth : window.innerWidth;
+    const rawH = shell && shell.clientHeight > 0 ? shell.clientHeight : window.innerHeight;
+    return {
+      w: Math.max(1, Math.round(rawW)),
+      h: Math.max(1, Math.round(rawH)),
+    };
+  }, []);
 
   // Refs read by RAF preview and InputController without re-subscribing listeners.
   const playstyleRef = useRef<ResonanceFormType>(playstyle);
@@ -223,12 +234,15 @@ export const App: React.FC = () => {
     rendererRef.current = renderer;
     setEngineReady(false);
 
+    const { w: initW, h: initH } = measureViewportSize();
+    lastSizeRef.current = { w: initW, h: initH };
+
     renderer
-      .init(canvasEl, window.innerWidth, window.innerHeight)
+      .init(canvasEl, initW, initH)
       .then(() => {
         if (cancelled || !renderer.ready) return;
-        const w = window.innerWidth;
-        const h = window.innerHeight;
+        const { w, h } = measureViewportSize();
+        lastSizeRef.current = { w, h };
         renderer.resize(w, h);
         gameEngineRef.current?.setCinematicCamera(cinematicCameraRef.current);
         gameEngineRef.current?.setSelectedSkin(selectedSkinRef.current);
@@ -257,7 +271,7 @@ export const App: React.FC = () => {
         rendererRef.current = null;
       }
     };
-  }, [rendererMode]);
+  }, [rendererMode, measureViewportSize]);
 
   // Menu background preview loop. Stopped and cleared immediately on 'loading' / 'game'.
   useEffect(() => {
@@ -286,17 +300,38 @@ export const App: React.FC = () => {
     return () => cancelAnimationFrame(rafId);
   }, [screen, rendererEpoch]);
 
-  // Responsive viewport resize listener
+  // Responsive viewport resize listener (ResizeObserver + window resize/orientationchange + visualViewport)
   useEffect(() => {
-    const onResize = () => {
-      const w = window.innerWidth;
-      const h = window.innerHeight;
+    const syncViewportSize = () => {
+      const { w, h } = measureViewportSize();
+      const { w: lastW, h: lastH } = lastSizeRef.current;
+      if (w === lastW && h === lastH) return;
+      lastSizeRef.current = { w, h };
       rendererRef.current?.resize(w, h);
       gameEngineRef.current?.resize(w, h);
     };
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
+
+    let resizeObserver: ResizeObserver | null = null;
+    const shellEl = shellRef.current;
+    if (shellEl && typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => {
+        syncViewportSize();
+      });
+      resizeObserver.observe(shellEl);
+    }
+
+    window.addEventListener('resize', syncViewportSize);
+    window.addEventListener('orientationchange', syncViewportSize);
+    const visualViewport = window.visualViewport;
+    visualViewport?.addEventListener('resize', syncViewportSize);
+
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', syncViewportSize);
+      window.removeEventListener('orientationchange', syncViewportSize);
+      visualViewport?.removeEventListener('resize', syncViewportSize);
+    };
+  }, [measureViewportSize]);
 
   const handleReturnToMenu = useCallback(() => {
     launchSeqRef.current++;
@@ -500,6 +535,7 @@ export const App: React.FC = () => {
       onPanDelta: (dx, dy) => {
         gameEngineRef.current?.panCamera(dx, dy);
       },
+      getTouchSplitYRatio: () => gameEngineRef.current?.getTouchSplitYRatio() ?? 0.6,
     });
     return controller.attach(shellRef.current);
   }, [handleReturnToMenu, handleToggleCinematicCamera, handleTogglePause]);
