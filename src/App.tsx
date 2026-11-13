@@ -5,7 +5,7 @@ import { BUILT_IN_TRACKS } from './audio/proceduralTracks';
 import { InGameHUD } from './components/InGameHUD';
 import { PauseOverlay } from './components/PauseOverlay';
 import { ResultModal } from './components/ResultModal';
-import { StartScreen } from './components/StartScreen';
+import { StartScreen, type MenuStep } from './components/StartScreen';
 import { TrackLoadingModal } from './components/TrackLoadingModal';
 import { GameEngine } from './engine/GameEngine';
 import { InputController } from './engine/InputController';
@@ -26,25 +26,11 @@ import {
   type HUDTelemetry,
   type LoadingProgress,
   type RendererMode,
-  type ResonanceFormType,
   type SlashLane,
   type TrackMetadata,
 } from './types/game';
 
-const PLAYSTYLE_STORAGE_KEY = 'thorvg-run:playstyle:v1';
 const CINEMATIC_STORAGE_KEY = 'thorvg-run:cinematic:v1';
-
-function loadInitialPlaystyle(): ResonanceFormType {
-  try {
-    const raw = window.localStorage.getItem(PLAYSTYLE_STORAGE_KEY);
-    if (raw === 'bass' || raw === 'synth' || raw === 'treble') {
-      return raw;
-    }
-  } catch {
-    // Ignore storage access errors (e.g. private browsing / restricted context).
-  }
-  return 'synth';
-}
 
 function loadInitialCinematic(): boolean {
   try {
@@ -60,7 +46,7 @@ function loadInitialCinematic(): boolean {
 
 const INITIAL_HUD: HUDTelemetry = {
   rendererMode: 'sw',
-  difficulty: 'normal',
+  difficulty: 'standard',
   sfxMode: 'full',
   fps: 60,
   zoomDisplay: 1.0,
@@ -73,8 +59,6 @@ const INITIAL_HUD: HUDTelemetry = {
   resonanceGauge: 40,
   grooveHp: 100,
   maxGrooveHp: 100,
-  skillCooldownRatio: 0,
-  skillCooldownSec: 0,
   overdriveReady: false,
   overdriveActive: false,
   statusBanner: null,
@@ -111,9 +95,9 @@ export const App: React.FC = () => {
   const [rendererMode, setRendererMode] = useState<RendererMode>('sw');
   const [selectedTrack, setSelectedTrack] = useState<TrackMetadata>(BUILT_IN_TRACKS[0]!);
   const [customTracks, setCustomTracks] = useState<TrackMetadata[]>([]);
-  const [playstyle, setPlaystyle] = useState<ResonanceFormType>(() => loadInitialPlaystyle());
   const [cinematicCamera, setCinematicCamera] = useState<boolean>(() => loadInitialCinematic());
-  const [difficulty, setDifficulty] = useState<DifficultyMode>('normal');
+  const [difficulty, setDifficulty] = useState<DifficultyMode>('standard');
+  const [menuStep, setMenuStep] = useState<MenuStep>('setup');
   const [unlockedSkins, setUnlockedSkins] = useState<CrewmateSkinId[]>(() => getUnlockedSkins());
   const [selectedSkin, setSelectedSkin] = useState<CrewmateSkinId>(() => loadSelectedSkin());
   const [audioOffsetMs, setAudioOffsetMs] = useState<number>(() => loadAudioOffsetMs());
@@ -125,7 +109,6 @@ export const App: React.FC = () => {
   const inGame = screen === 'game';
   const [hud, setHud] = useState<HUDTelemetry>(() => ({
     ...INITIAL_HUD,
-    activeForm: playstyle,
     cinematicCamera,
     audioOffsetMs,
   }));
@@ -152,8 +135,6 @@ export const App: React.FC = () => {
   }, []);
 
   // Refs read by RAF preview and InputController without re-subscribing listeners.
-  const playstyleRef = useRef<ResonanceFormType>(playstyle);
-  playstyleRef.current = playstyle;
   const cinematicCameraRef = useRef<boolean>(cinematicCamera);
   cinematicCameraRef.current = cinematicCamera;
   const difficultyRef = useRef<DifficultyMode>(difficulty);
@@ -186,16 +167,12 @@ export const App: React.FC = () => {
       }
       setHud(nextHud);
     });
-    engine.setPlaystyle(playstyle);
+    engine.setDifficulty(difficultyRef.current);
     engine.setCinematicCamera(cinematicCameraRef.current);
     engine.setSelectedSkin(selectedSkinRef.current);
     engine.setAudioOffsetMs(audioOffsetMsRef.current);
     gameEngineRef.current = engine;
   }
-
-  useEffect(() => {
-    gameEngineRef.current?.setPlaystyle(playstyle);
-  }, [playstyle]);
 
   useEffect(() => {
     cinematicCameraRef.current = cinematicCamera;
@@ -288,12 +265,7 @@ export const App: React.FC = () => {
     const start = performance.now();
     const tick = (now: number) => {
       const speedPx = DIFFICULTY_CONFIG[difficultyRef.current].worldPxPerSec;
-      renderer.renderPreviewFrame(
-        (now - start) / 1000,
-        playstyleRef.current,
-        speedPx,
-        selectedSkinRef.current
-      );
+      renderer.renderPreviewFrame((now - start) / 1000, speedPx, selectedSkinRef.current);
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
@@ -340,6 +312,7 @@ export const App: React.FC = () => {
     rendererRef.current?.clearForTransition();
     setUnlockedSkins(getUnlockedSkins());
     setHud((prev) => ({ ...prev, isPaused: false, userZoom: 1.0, isPanned: false }));
+    setMenuStep('track');
     setScreen('menu');
   }, []);
 
@@ -400,18 +373,6 @@ export const App: React.FC = () => {
     []
   );
 
-  const handleSelectPlaystyle = useCallback((nextStyle: ResonanceFormType) => {
-    playstyleRef.current = nextStyle;
-    setPlaystyle(nextStyle);
-    try {
-      window.localStorage.setItem(PLAYSTYLE_STORAGE_KEY, nextStyle);
-    } catch {
-      // Ignore storage access errors.
-    }
-    gameEngineRef.current?.setPlaystyle(nextStyle);
-    setHud((prev) => ({ ...prev, activeForm: nextStyle }));
-  }, []);
-
   const handleSelectDifficulty = useCallback((nextDiff: DifficultyMode) => {
     setDifficulty(nextDiff);
     gameEngineRef.current?.setDifficulty(nextDiff);
@@ -433,7 +394,6 @@ export const App: React.FC = () => {
     const seq = ++launchSeqRef.current;
     finishedAtRef.current = 0;
     rendererRef.current?.clearForTransition();
-    engine.setPlaystyle(playstyle);
     engine.setCinematicCamera(cinematicCamera);
     engine.setSelectedSkin(selectedSkinRef.current);
     engine.setAudioOffsetMs(audioOffsetMsRef.current);
@@ -446,7 +406,7 @@ export const App: React.FC = () => {
       rendererMode,
       difficulty,
       sfxMode: gameEngineRef.current?.getSfxMode() ?? prev.sfxMode ?? 'full',
-      activeForm: playstyle,
+      activeForm: 'synth',
       cinematicCamera,
       audioOffsetMs: audioOffsetMsRef.current,
     }));
@@ -471,7 +431,7 @@ export const App: React.FC = () => {
         await new Promise((r) => setTimeout(r, 480));
         if (launchSeqRef.current !== seq) return;
 
-        const runPromise = engine.startRun(selectedTrack, undefined, difficulty, playstyle);
+        const runPromise = engine.startRun(selectedTrack, undefined, difficulty);
         setLaunchKey((k) => k + 1);
         setScreen('game');
         await runPromise;
@@ -482,7 +442,7 @@ export const App: React.FC = () => {
         }
       }
     })();
-  }, [cinematicCamera, difficulty, playstyle, rendererMode, selectedTrack]);
+  }, [cinematicCamera, difficulty, rendererMode, selectedTrack]);
 
   const handleStartRunRef = useRef(handleStartRun);
   handleStartRunRef.current = handleStartRun;
@@ -575,15 +535,15 @@ export const App: React.FC = () => {
           selectedTrack={selectedTrack}
           customTracks={customTracks}
           rendererMode={rendererMode}
-          playstyle={playstyle}
           difficulty={difficulty}
           selectedSkin={selectedSkin}
           unlockedSkins={unlockedSkins}
           engineReady={engineReady}
+          step={menuStep}
+          onStepChange={setMenuStep}
           onSelectTrack={setSelectedTrack}
           onUploadFile={handleUploadFile}
           onSelectRenderer={setRendererMode}
-          onSelectPlaystyle={handleSelectPlaystyle}
           onSelectDifficulty={handleSelectDifficulty}
           onSelectSkin={handleSelectSkin}
           onStartRun={handleStartRun}

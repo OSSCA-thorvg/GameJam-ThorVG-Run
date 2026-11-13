@@ -8,7 +8,6 @@ export function resolveBanner(t: Messages, banner: BannerMessage): string {
   const bonusVal = banner.params?.bonus;
   return formatMessage(t.banner[banner.key], {
     form: formText?.name ?? '',
-    skill: formText?.skillName ?? '',
     band: formText?.band ?? '',
     count: banner.params?.count ?? 0,
     collected: banner.params?.collected ?? 0,

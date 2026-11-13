@@ -258,7 +258,7 @@ export function appendStarPath(
 
 /**
  * Appends pure-vector skin-specific afterimage trail geometry (`0KB` procedural):
- * - `'classic'`: active playstyle polygon (`bass` hex / `synth` diamond / `treble` delta)
+ * - `'classic'`: active resonance polygon (`bass` hex / `synth` diamond / `treble` delta)
  * - `'prism'`: 8-point crystalline Valkyrie star
  * - `'flawless'`: 6-vertex tactical Cyber Aegis chevron-wing
  * - `'grandmaster'`: 6-point royal Solar Crest + counter-wound inner diamond core
@@ -401,7 +401,7 @@ export function drawCrewmateSkinOrnaments(params: CrewmateSkinOrnamentParams): v
   const clampAlpha = (a: number): number =>
     Math.max(0, Math.min(255, Math.round(a * alphaRatio)));
 
-  // Always preserve playstyle shield aura + sacred combo halo on `playerGlowShape`
+  // Always preserve resonance shield aura + sacred combo halo on `playerGlowShape`
   appendPolygonPath(playerGlowShape, cx, cy, radius * 1.45, rotation, form);
   appendSacredComboHalo(playerGlowShape, cx, cy, radius, combo, timeSec, overdriveActive);
 

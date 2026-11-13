@@ -12,7 +12,6 @@ import {
   FORM_CONFIG,
   type CrewmateSkinId,
   type RendererMode,
-  type ResonanceFormType,
   type RenderFrameState,
 } from '../types/game';
 import { buildCharacterMatrix } from './characterMatrix';
@@ -491,8 +490,7 @@ export class ThorVGRenderer {
 
   public renderPreviewFrame(
     timeSec: number,
-    previewForm: ResonanceFormType = 'synth',
-    previewSpeedPxPerSec: number = 550,
+    previewSpeedPxPerSec: number = 540,
     previewSkin: CrewmateSkinId = 'classic'
   ): void {
     if (!this.canvas || !this.tvg || !this.shapes || this.disposed) return;
@@ -508,14 +506,14 @@ export class ThorVGRenderer {
     this.shapes.vfxSlashCrimson.reset().fill(0, 0, 0, 0);
     this.shapes.vfxSlashCore.reset().fill(0, 0, 0, 0);
 
-    const { playerX, playerY, runCycle, playerLane, playerRotation } = renderMenuPreviewPass(
-      this.shapes,
-      this.width,
-      this.height,
-      timeSec,
-      previewForm,
-      previewSpeedPxPerSec
-    );
+    const { playerX, playerY, runCycle, playerLane, playerRotation, activeForm } =
+      renderMenuPreviewPass(
+        this.shapes,
+        this.width,
+        this.height,
+        timeSec,
+        previewSpeedPxPerSec
+      );
 
     const heightPx = 24 * CREW_HEIGHT_RATIO;
     const cy = this.crewAnim ? playerY + 24 - heightPx / 2 : playerY;
@@ -534,13 +532,13 @@ export class ThorVGRenderer {
         gy,
         gRadius,
         gRot,
-        previewForm,
+        activeForm,
         previewSkin
       );
     }
     const [tr, tg, tb] =
       previewSkin === 'classic'
-        ? FORM_CONFIG[previewForm].rgb
+        ? FORM_CONFIG[activeForm].rgb
         : CREWMATE_SKIN_CONFIG[previewSkin].primaryRgb;
     this.shapes.effects
       .fill(tr, tg, tb, previewSkin === 'classic' ? 38 : 62)
@@ -559,7 +557,7 @@ export class ThorVGRenderer {
         cy,
         radius: 24,
         rotation: playerRotation,
-        form: previewForm,
+        form: activeForm,
         skinId: previewSkin,
         alphaRatio: 1,
         combo: previewSkin === 'grandmaster' ? 30 : 1,
@@ -578,7 +576,7 @@ export class ThorVGRenderer {
         playerY,
         24,
         timeSec * 1.2,
-        previewForm,
+        activeForm,
         1.0
       );
     }

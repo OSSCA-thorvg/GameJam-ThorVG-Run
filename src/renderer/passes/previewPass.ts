@@ -15,6 +15,7 @@ export interface PreviewPlayerAnchor {
   runCycle: number;
   playerLane: SlashLane;
   playerRotation: number;
+  activeForm: ResonanceFormType;
 }
 
 type PreviewTargetKind = 'low' | 'high' | 'chord' | 'prismHigh' | 'sawblade';
@@ -43,18 +44,14 @@ export function renderMenuPreviewPass(
   width: number,
   height: number,
   timeSec: number,
-  previewForm: ResonanceFormType,
   previewSpeedPxPerSec: number
 ): PreviewPlayerAnchor {
   const speed = Math.max(360, previewSpeedPxPerSec);
-  const formCfg = FORM_CONFIG[previewForm];
-  const [r, g, b] = formCfg.rgb;
-
   const isTopBannerStage = width <= 960 && height >= 700;
 
-  // Unobstructed left-gutter preview anchor on desktop (at 1280x720: cardWidth=880, leftGutter=200 -> playerX=102, reticleX=148)
+  // Unobstructed left-gutter preview anchor on desktop (at 1280x720: cardWidth=900, leftGutter=190 -> playerX=96.9, reticleX=142.9)
   // On mobile/tablet portrait (`width <= 960 && height >= 700`), renders a self-contained top-banner 2-Lane stage in `y = 0..152`
-  const cardWidth = Math.min(width - 40, 880);
+  const cardWidth = Math.min(width - 40, 900);
   const leftGutter = Math.max(0, (width - cardWidth) * 0.5);
   const basePlayerX = isTopBannerStage
     ? Math.max(54, width * 0.20)
@@ -62,6 +59,26 @@ export function renderMenuPreviewPass(
       ? Math.min(width * 0.22, leftGutter * 0.51)
       : width * 0.20;
   const reticleX = isTopBannerStage ? basePlayerX + 42 : basePlayerX + 46;
+
+  const scrollPx = timeSec * speed;
+  const beatSpacing = 228;
+  const activeBeatIdx = Math.round((scrollPx + reticleX + beatSpacing * 0.18) / beatSpacing);
+  const activeKind =
+    PREVIEW_PATTERN[
+      ((activeBeatIdx % PREVIEW_PATTERN.length) + PREVIEW_PATTERN.length) % PREVIEW_PATTERN.length
+    ]!;
+  const activeForm: ResonanceFormType =
+    activeKind === 'low'
+      ? 'bass'
+      : activeKind === 'chord' || activeKind === 'prismHigh'
+        ? 'treble'
+        : 'synth';
+  const playerLane: SlashLane =
+    activeKind === 'high' || activeKind === 'prismHigh' || activeKind === 'sawblade'
+      ? 'high'
+      : 'low';
+  const formCfg = FORM_CONFIG[activeForm];
+  const [r, g, b] = formCfg.rgb;
 
   const laneHighY = isTopBannerStage ? 50 : height * 0.45;
   const laneLowY = isTopBannerStage ? 104 : height * 0.69;
@@ -74,7 +91,6 @@ export function renderMenuPreviewPass(
   // 2. Fast-scrolling neon rhythm grid
   shapes.grid.reset().fill(0, 0, 0, 0);
   const gridSpacing = 72;
-  const scrollPx = timeSec * speed;
   const scrollOffset = scrollPx % gridSpacing;
   for (let x = -scrollOffset; x <= width; x += gridSpacing) {
     shapes.grid.moveTo(x, 0).lineTo(x, deckBottomY);
@@ -101,7 +117,6 @@ export function renderMenuPreviewPass(
   shapes.vfxSlashCore.reset().fill(0, 0, 0, 0);
 
   // 3. 2F Cyan Sky Rail Guide Line + Beat Pulse Ticks (`shapes.aurora`)
-  const beatSpacing = 228;
   const beatPhase = ((scrollPx + reticleX) % beatSpacing) / beatSpacing;
   const beatPulse = Math.pow(Math.max(0, 1 - beatPhase * 2.2), 2);
 
@@ -404,17 +419,7 @@ export function renderMenuPreviewPass(
     }
   }
 
-  // 6. Determine Active Player Demo Lane & Dual Neon Reticle Geometry
-  const activeBeatIdx = Math.round((scrollPx + reticleX + beatSpacing * 0.18) / beatSpacing);
-  const activeKind =
-    PREVIEW_PATTERN[
-      ((activeBeatIdx % PREVIEW_PATTERN.length) + PREVIEW_PATTERN.length) % PREVIEW_PATTERN.length
-    ]!;
-  const playerLane: SlashLane =
-    activeKind === 'high' || activeKind === 'prismHigh' || activeKind === 'sawblade'
-      ? 'high'
-      : 'low';
-
+  // 6. Dual Neon Reticle Geometry
   const rHigh = (playerLane === 'high' ? 22 : 19.5) * (1 + reticlePulseHigh * 0.38);
   const rLow = (playerLane === 'low' ? 22 : 19.5) * (1 + reticlePulseLow * 0.38);
   const rotH = timeSec * 1.0 + reticlePulseHigh * 0.4;
@@ -532,5 +537,5 @@ export function renderMenuPreviewPass(
   const playerRotation = playerLane === 'high' ? 0.06 : 0.09;
   const runCycle = timeSec * (speed / 440);
 
-  return { playerX, playerY, runCycle, playerLane, playerRotation };
+  return { playerX, playerY, runCycle, playerLane, playerRotation, activeForm };
 }

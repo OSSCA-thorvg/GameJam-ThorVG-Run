@@ -48,7 +48,7 @@ const GOLD_RGB: readonly [number, number, number] = [255, 230, 0];
  * - `[Fix 2]` World scroll (`cameraX`) NEVER freezes during hitstop (`0.0ms` scroll lag)
  * - `[Fix 3]` Pause-continuous `getEffectiveElapsedSec()` + sub-frame `e.timeStamp` compensation + live sync offset
  * - `[Fix 4]` Reticle focal lock (`fx = getReticleScreenX()`), `50ms` `CHORD` sync window, `75ms` `HOLD` grace, `RUSH` lock-on
- * - `[Fix 5]` Zero-cooldown `applyMissGrooveDrain` (`-16 HP` Normal) vs `0.45s` `applyHazardDamage`
+ * - `[Fix 5]` Zero-cooldown `applyMissGrooveDrain` (`-16 HP` Standard) vs `0.45s` `applyHazardDamage`
  */
 export class GameEngine {
   private readonly audio: AudioEngine;
@@ -62,7 +62,7 @@ export class GameEngine {
   private width: number = 1280;
   private height: number = 720;
   private rendererMode: RendererMode = 'sw';
-  private difficulty: DifficultyMode = 'normal';
+  private difficulty: DifficultyMode = 'standard';
 
   private activeBlueprint: TrackBlueprint | null = null;
   private currentTrackMeta: TrackMetadata | null = null;
@@ -119,9 +119,9 @@ export class GameEngine {
   private shakeDuration: number = 0.2;
   private shakeIntensity: number = 0;
 
-  // Playstyle, Skin, Groove HP & Resonance Overdrive State
-  private playstyle: ResonanceFormType = 'synth';
+  // Live Music Resonance, Skin, Groove HP & Overdrive State
   private activeForm: ResonanceFormType = 'synth';
+  private resonanceHoldTimer: number = 0;
   private selectedSkin: CrewmateSkinId = 'classic';
   private resonanceGauge: number = 35;
   private overdriveTimer: number = 0;
@@ -237,17 +237,15 @@ export class GameEngine {
     return this.difficulty;
   }
 
-  public setPlaystyle(style: ResonanceFormType): void {
-    this.playstyle = style;
-    if (!this.running) {
-      this.playerController.reset(style);
-      this.activeForm = style;
+  private shiftActiveForm(nextForm: ResonanceFormType, holdSec: number = 0): void {
+    if (holdSec > 0) {
+      this.resonanceHoldTimer = Math.max(this.resonanceHoldTimer, holdSec);
     }
-    this.hudDirty = true;
-  }
-
-  public getPlaystyle(): ResonanceFormType {
-    return this.playstyle;
+    if (this.activeForm !== nextForm) {
+      this.activeForm = nextForm;
+      this.playerController.setResonance(nextForm);
+      this.hudDirty = true;
+    }
   }
 
   public setSelectedSkin(skinId: CrewmateSkinId): void {
@@ -343,7 +341,8 @@ export class GameEngine {
     this.beatPulse = 1.0;
     this.reticlePulseHigh = 1.0;
     this.reticlePulseLow = 1.0;
-    this.healGrooveHp(this.difficulty === 'hard' ? 22 : 26);
+    this.shiftActiveForm('treble', 0.65);
+    this.healGrooveHp(26);
     this.hudDirty = true;
 
     const rx = this.getReticleScreenX();
@@ -469,13 +468,9 @@ export class GameEngine {
   public async startRun(
     track: TrackMetadata,
     onProgress?: (status: LoadingProgress) => void,
-    difficulty: DifficultyMode = this.difficulty,
-    playstyle?: ResonanceFormType
+    difficulty: DifficultyMode = this.difficulty
   ): Promise<void> {
     this.difficulty = difficulty;
-    if (playstyle) {
-      this.playstyle = playstyle;
-    }
     if (
       !this.activeBlueprint ||
       this.activeBlueprint.trackId !== track.id ||
@@ -940,8 +935,9 @@ export class GameEngine {
       this.terrain.reset(this.width, this.height);
     }
 
-    this.playerController.reset(this.playstyle);
-    this.activeForm = this.playstyle;
+    this.playerController.reset();
+    this.activeForm = 'synth';
+    this.resonanceHoldTimer = 0;
 
     const initialEffectiveSec = this.audio.getEffectiveElapsedSec();
     this.cameraX = initialEffectiveSec * this.baseSpeed - this.getReticleScreenX();
@@ -1118,6 +1114,7 @@ export class GameEngine {
     target.rushHits = nextHits;
     const reqHits = target.rushTargetHits ?? 8;
     this.activeRushCombo = nextHits;
+    this.shiftActiveForm('treble', 0.65);
     this.hudDirty = true;
 
     const rx = this.getReticleScreenX();
@@ -1225,6 +1222,7 @@ export class GameEngine {
     }
 
     // Air X-cross swing
+    this.shiftActiveForm('treble', 0.28);
     const rx = this.getReticleScreenX();
     const midY = (this.terrain.getLaneHighScreenY() + this.terrain.getLaneLowScreenY()) * 0.5;
     const wScale = this.playerController.profile.slashWidthScale;
@@ -1283,6 +1281,7 @@ export class GameEngine {
     if (matchedTarget) {
       if (matchedTarget.kind === 'chord') {
         // [Fix 4] Record first-hand partial hit on CHORD and wait up to 50ms (`CHORD_SYNC_WINDOW_SEC`)
+        this.shiftActiveForm(lane === 'low' ? 'bass' : 'synth', 0.28);
         matchedTarget.chordPartialLane = lane;
         matchedTarget.chordPartialSec = hitAudioSec;
         matchedTarget.chordPartialSignedMs = Math.round(
@@ -1317,6 +1316,7 @@ export class GameEngine {
     }
 
     // Air katana swing (tactile feedback, zero penalty so player can freely dodge hazards!)
+    this.shiftActiveForm(lane === 'low' ? 'bass' : 'synth', 0.28);
     const rx = this.getReticleScreenX();
     const laneY =
       lane === 'high' ? this.terrain.getLaneHighScreenY() : this.terrain.getLaneLowScreenY();
@@ -1355,6 +1355,12 @@ export class GameEngine {
     const isCritical =
       grade === 'PERFECT' && this.scoreJudge.isCriticalDeltaMs(deltaMs, this.difficulty);
     target.hitGrade = grade;
+
+    if (target.isPrismStar || isCritical) {
+      this.shiftActiveForm('treble', 0.48);
+    } else {
+      this.shiftActiveForm(lane === 'low' ? 'bass' : 'synth', 0.42);
+    }
 
     this.scoreJudge.recordOrbCollected();
     const rx = this.getReticleScreenX();
@@ -1434,6 +1440,10 @@ export class GameEngine {
     target.holdReleaseGraceSec = 0.075;
     target.holdNextTickSec = hitAudioSec + 0.1;
     this.isGrinding = true;
+    this.shiftActiveForm(
+      target.isPrismStar ? 'treble' : target.lane === 'low' ? 'bass' : 'synth',
+      0.42
+    );
 
     this.scoreJudge.recordOrbCollected();
     const rx = this.getReticleScreenX();
@@ -1482,6 +1492,7 @@ export class GameEngine {
     const isCritical =
       grade === 'PERFECT' && this.scoreJudge.isCriticalDeltaMs(deltaMs, this.difficulty);
     target.hitGrade = grade;
+    this.shiftActiveForm('treble', 0.65);
 
     this.reticlePulseHigh = 1.0;
     this.reticlePulseLow = 1.0;
@@ -1529,7 +1540,7 @@ export class GameEngine {
     if (!target.isPrismStar) return;
     this.scoreJudge.recordStarCollected();
     this.addResonanceGauge(18 * this.playerController.profile.gaugeChargeMult);
-    this.healGrooveHp(this.difficulty === 'hard' ? 14 : 18);
+    this.healGrooveHp(18);
     this.audio.sfx.playPrismStar();
     this.vfx.spawnShockwave(screenX, screenY, 18, 175, GOLD_RGB, 1.0);
     this.vfx.spawnBurst(screenX, screenY, GOLD_RGB, 20);
@@ -1558,14 +1569,12 @@ export class GameEngine {
 
   /**
    * [Fix 5] Zero-cooldown Groove HP drain per missed slash target:
-   * - `Easy`: `0` drain (`CHILL NO-FAIL`)
-   * - `Normal`: `-16 HP` (`-22 HP` on `CHORD`/`RUSH`), `bass` `-20%` -> `-12.8 HP` (`9 * 12.8 = 115.2 >= 100`)
-   * - `Hard`: `-20 HP` (`-28 HP` on `CHORD`/`RUSH`)
+   * - `Casual`: `0` drain (`CASUAL NO-FAIL`)
+   * - `Standard`: `-16 HP` (`-22 HP` on `CHORD`/`RUSH`)
    */
   private applyMissGrooveDrain(isHeavy: boolean): void {
-    if (this.difficulty === 'easy' || this.isFailed) return;
-    const baseDrain =
-      this.difficulty === 'hard' ? (isHeavy ? 28 : 20) : isHeavy ? 22 : 16;
+    if (this.difficulty === 'casual' || this.isFailed) return;
+    const baseDrain = isHeavy ? 22 : 16;
     const overdriveMitigation = this.overdriveTimer > 0 ? 0.5 : 1.0;
     const drain =
       baseDrain * this.playerController.profile.grooveDamageScale * overdriveMitigation;
@@ -1582,14 +1591,14 @@ export class GameEngine {
    */
   private applyHazardDamage(): void {
     if (
-      this.difficulty === 'easy' ||
+      this.difficulty === 'casual' ||
       this.isFailed ||
       this.overdriveTimer > 0 ||
       this.hazardDamageCooldown > 0
     ) {
       return;
     }
-    const baseDmg = this.difficulty === 'hard' ? 28 : 22;
+    const baseDmg = 22;
     const dmg = baseDmg * this.playerController.profile.grooveDamageScale;
     const prevHp = this.grooveHp;
     this.grooveHp = Math.max(0, this.grooveHp - dmg);
@@ -1602,7 +1611,7 @@ export class GameEngine {
   }
 
   private healGrooveHp(amount: number): void {
-    if (this.difficulty === 'easy' || this.isFailed || this.grooveHp >= this.maxGrooveHp) {
+    if (this.difficulty === 'casual' || this.isFailed || this.grooveHp >= this.maxGrooveHp) {
       return;
     }
     const prevRounded = Math.round(this.grooveHp);
@@ -1692,9 +1701,7 @@ export class GameEngine {
       this.beatPulse = 1.0;
       this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.1);
       this.addResonanceGauge((isCritical ? 6.8 : 5.5) * gaugeMult);
-      this.healGrooveHp(
-        (this.difficulty === 'hard' ? 1.8 : 2.4) * (this.scoreJudge.combo >= 25 ? 1.4 : 1.0)
-      );
+      this.healGrooveHp(2.4 * (this.scoreJudge.combo >= 25 ? 1.4 : 1.0));
       this.vfx.spawnShockwave(
         screenX,
         screenY,
@@ -1708,7 +1715,7 @@ export class GameEngine {
       this.beatPulse = Math.max(this.beatPulse, 0.55);
       this.surfMomentum = Math.min(1.0, this.surfMomentum + 0.06);
       this.addResonanceGauge(3.6 * gaugeMult);
-      this.healGrooveHp(this.difficulty === 'hard' ? 0.6 : 0.9);
+      this.healGrooveHp(0.9);
       this.vfx.spawnBurst(screenX, screenY, lane === 'high' ? CYAN_RGB : CRIMSON_RGB, 8);
     } else if (grade === 'GOOD') {
       this.addResonanceGauge(1.8 * gaugeMult);
@@ -1794,7 +1801,7 @@ export class GameEngine {
     }
 
     if (this.overdriveTimer > 0) {
-      this.healGrooveHp((this.difficulty === 'hard' ? 2.8 : 3.8) * dt);
+      this.healGrooveHp(3.8 * dt);
       this.overdriveTimer = Math.max(0, this.overdriveTimer - dt);
       this.resonanceGauge = (this.overdriveTimer / OVERDRIVE_DURATION_SEC) * 100;
       if (this.overdriveTimer === 0) {
@@ -1854,9 +1861,9 @@ export class GameEngine {
     this.vfx.update(dt, renderStepX, this.hitstopTimer > 0);
     this.prevRenderCameraX = this.cameraX;
 
-    this.updateLanePostureAndTargets(dt, effectiveAudioSec);
+    this.updateLanePostureAndTargets(dt, effectiveAudioSec, freq);
 
-    if (!this.isFailed && this.difficulty !== 'easy' && this.grooveHp <= 0) {
+    if (!this.isFailed && this.difficulty !== 'casual' && this.grooveHp <= 0) {
       this.triggerStageFail(effectiveAudioSec, freq, speedMultiplier);
       return;
     }
@@ -1912,7 +1919,12 @@ export class GameEngine {
     }
   }
 
-  private updateLanePostureAndTargets(dt: number, effectiveAudioSec: number): void {
+  private updateLanePostureAndTargets(
+    dt: number,
+    effectiveAudioSec: number,
+    freq: FrequencyBands
+  ): void {
+    this.resonanceHoldTimer = Math.max(0, this.resonanceHoldTimer - dt);
     const reticleScreenX = this.getReticleScreenX();
     const reticleWorldX = this.cameraX + reticleScreenX;
     const { floorY, angleRad, segment } = this.terrain.sampleFloor(reticleWorldX);
@@ -2166,9 +2178,15 @@ export class GameEngine {
       }
     }
 
-    // 2. Update Crewmate 2-Lane Posture & Auto-Return from HIGH hang (`0.48s`)
+    // 2. Update Crewmate 2-Lane Posture, Live Music Band Resonance & Auto-Return from HIGH hang (`0.48s`)
     this.isGrinding = activeHoldLane !== null;
     if (activeHoldLane !== null) {
+      if (this.overdriveTimer <= 0) {
+        const holdForm: ResonanceFormType = activeHoldLane === 'low' ? 'bass' : 'synth';
+        if (!(this.activeForm === 'treble' && this.resonanceHoldTimer > 0.18)) {
+          this.shiftActiveForm(holdForm, 0.18);
+        }
+      }
       if (this.playerLane !== activeHoldLane) {
         this.playerLane = activeHoldLane;
         this.hudDirty = true;
@@ -2176,6 +2194,18 @@ export class GameEngine {
       if (activeHoldLane === 'high') {
         this.highAirHangTimer = Math.max(this.highAirHangTimer, 0.14);
       }
+    }
+
+    if (this.overdriveTimer > 0) {
+      this.shiftActiveForm('treble', 0.1);
+    } else if (this.resonanceHoldTimer <= 0) {
+      const bandForm: ResonanceFormType =
+        this.currentSectionIntensity === 'drop' &&
+        freq.high >= 0.48 &&
+        freq.high >= freq.low
+          ? 'treble'
+          : (segment?.energyBand ?? 'synth');
+      this.shiftActiveForm(bandForm, 0.18);
     }
 
     if (this.chordPoseTimer > 0) {
@@ -2213,7 +2243,7 @@ export class GameEngine {
       }
     }
 
-    const momentumDecay = (this.activeForm === 'treble' ? 0.015 : 0.022) * dt;
+    const momentumDecay = 0.02 * dt;
     this.surfMomentum = Math.max(0.22, Math.min(1.0, this.surfMomentum - momentumDecay));
 
     if (
@@ -2329,8 +2359,6 @@ export class GameEngine {
       newlyUnlockedSkins: this.newlyUnlockedSkins,
       overdriveReady: this.overdriveTimer <= 0 && this.resonanceGauge >= 100,
       overdriveActive: this.overdriveTimer > 0,
-      skillCooldownRatio: 0,
-      skillCooldownSec: 0,
       statusBanner: this.statusBanner,
       isFinished,
       trapsDestroyed: this.scoreJudge.trapsDestroyed,

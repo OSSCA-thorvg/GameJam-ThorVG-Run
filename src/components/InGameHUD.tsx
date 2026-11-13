@@ -44,7 +44,7 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
   const totalStars = hud.totalStars ?? 3;
   const isNoMiss = (hud.judgmentCounts?.miss ?? 0) === 0;
   const accuracyText = (hud.accuracy ?? 100).toFixed(1);
-  const diffMode = hud.difficulty ?? 'normal';
+  const diffMode = hud.difficulty ?? 'standard';
   const sfxMode = hud.sfxMode ?? 'full';
   const sfxLabel =
     sfxMode === 'full' ? t.hud.sfxFull : sfxMode === 'impact' ? t.hud.sfxImpact : t.hud.sfxOff;
@@ -82,14 +82,6 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
     ? format(t.hud.overdriveActive, { value: hud.resonanceGauge })
     : format(t.hud.resonance, { value: hud.resonanceGauge });
 
-  const isSkillCoolingDown = (hud.skillCooldownRatio ?? 0) > 0.02;
-  const skillStatusLabel = isSkillCoolingDown
-    ? format(t.hud.skillCooldown, {
-        skill: formText.skillName,
-        sec: (hud.skillCooldownSec ?? 0).toFixed(1),
-      })
-    : formText.skillDesc;
-
   const zoomDisplayText =
     hud.zoomDisplay < 1 ? hud.zoomDisplay.toFixed(2) : hud.zoomDisplay.toFixed(1);
   const userZoom = hud.userZoom ?? 1.0;
@@ -117,7 +109,7 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
             <span className={`renderer-badge ${hud.rendererMode === 'gl' ? 'gpu' : 'cpu'}`}>
               {hud.rendererMode === 'sw' ? t.hud.modeCpu : t.hud.modeGpu}
             </span>
-            <span className={`diff-badge ${diffMode}`}>{t.difficulties[diffMode].name}</span>
+            <span className={`diff-badge ${diffMode}`}>{t.difficulties[diffMode].shortName}</span>
             <span className="fps-badge">FPS: {hud.fps}</span>
             <span className="surf-badge">{format(t.hud.surfSpeed, { speed: surfSpeed })}</span>
             <span className="acc-badge">{format(t.hud.accuracy, { value: accuracyText })}</span>
@@ -131,7 +123,7 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
           </div>
           <div className="hud-sub-status">
             <span>
-              {t.hud.styleLabel}:{' '}
+              {t.hud.resonanceBandLabel}:{' '}
               <strong style={{ color: formCfg.colorHex }}>{formText.name}</strong>
             </span>
             <span
@@ -329,7 +321,7 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
           </button>
         </div>
 
-        {/* Bottom-center: Overdrive trigger, Groove HP / Chill status, Katana style & Resonance bar */}
+        {/* Bottom-center: Overdrive trigger, Groove HP / Casual status & Live Resonance bar */}
         <div className="hud-bottom-center" data-ui-panel="true">
           {hud.overdriveReady && (
             <button
@@ -342,7 +334,7 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
             </button>
           )}
 
-          {diffMode === 'easy' ? (
+          {diffMode === 'casual' ? (
             <div className="groove-hp-row chill" data-testid="hud-chill-pill">
               <span>{t.hud.chillNoFail}</span>
             </div>
@@ -374,19 +366,15 @@ export const InGameHUD: React.FC<InGameHUDProps> = ({
                   ◆ {formText.name}
                 </strong>
                 <span
-                  data-testid="hud-skill-status"
-                  className={`hud-skill-pill ${isSkillCoolingDown ? 'cooldown' : 'ready'}`}
-                  style={
-                    !isSkillCoolingDown
-                      ? {
-                          borderColor: `${formCfg.colorHex}88`,
-                          color: formCfg.colorHex,
-                          backgroundColor: `${formCfg.colorHex}1F`,
-                        }
-                      : undefined
-                  }
+                  data-testid="hud-resonance-status"
+                  className="hud-skill-pill ready"
+                  style={{
+                    borderColor: `${hud.overdriveActive ? '#FFE600' : formCfg.colorHex}88`,
+                    color: hud.overdriveActive ? '#FFE600' : formCfg.colorHex,
+                    backgroundColor: `${hud.overdriveActive ? '#FFE600' : formCfg.colorHex}1F`,
+                  }}
                 >
-                  {skillStatusLabel}
+                  {hud.overdriveActive ? t.hud.overdriveResonance : formText.band}
                 </span>
               </div>
               <strong className={hud.overdriveReady || hud.overdriveActive ? 'gauge-text-hot' : ''}>

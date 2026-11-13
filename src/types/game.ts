@@ -73,7 +73,7 @@ export const CREWMATE_SKIN_CONFIG: Record<
   },
 };
 
-export type DifficultyMode = 'easy' | 'normal' | 'hard';
+export type DifficultyMode = 'casual' | 'standard';
 
 /**
  * Live-switchable Procedural Sound Effect Mode:
@@ -103,18 +103,18 @@ export interface DifficultyProfile {
 }
 
 export const DIFFICULTY_CONFIG: Record<DifficultyMode, DifficultyProfile> = {
-  easy: {
-    mode: 'easy',
-    worldPxPerSec: 520,
-    density: 0.65,
-    perfectMs: 75,
-    greatMs: 135,
-    goodMs: 185,
+  casual: {
+    mode: 'casual',
+    worldPxPerSec: 540,
+    density: 0.72,
+    perfectMs: 72,
+    greatMs: 130,
+    goodMs: 180,
     colorHex: '#00F5A0',
     rgb: [0, 245, 160],
   },
-  normal: {
-    mode: 'normal',
+  standard: {
+    mode: 'standard',
     worldPxPerSec: 680,
     density: 1.0,
     perfectMs: 52,
@@ -122,16 +122,6 @@ export const DIFFICULTY_CONFIG: Record<DifficultyMode, DifficultyProfile> = {
     goodMs: 150,
     colorHex: '#05D5FF',
     rgb: [5, 213, 255],
-  },
-  hard: {
-    mode: 'hard',
-    worldPxPerSec: 840,
-    density: 1.35,
-    perfectMs: 38,
-    greatMs: 78,
-    goodMs: 120,
-    colorHex: '#FF2A6D',
-    rgb: [255, 42, 109],
   },
 };
 
@@ -384,7 +374,7 @@ export interface RenderFrameState {
 
 export interface HUDTelemetry {
   rendererMode: RendererMode;
-  difficulty?: DifficultyMode;
+  difficulty: DifficultyMode;
   sfxMode?: SfxMode;
   fps: number;
   zoomDisplay: number;
@@ -401,10 +391,6 @@ export interface HUDTelemetry {
   newlyUnlockedSkins?: CrewmateSkinId[];
   overdriveReady?: boolean;
   overdriveActive?: boolean;
-  /** 0 = [Shift] skill ready, 0 < ratio <= 1 = remaining cooldown fraction */
-  skillCooldownRatio?: number;
-  /** Remaining [Shift] skill cooldown in seconds (rounded to 0.1s; 0 when ready) */
-  skillCooldownSec?: number;
   statusBanner: BannerMessage | null;
   isFinished: boolean;
   trapsDestroyed: number;

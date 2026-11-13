@@ -24,7 +24,7 @@ export const LANE_HIGH_Y = 368;
 export const LANE_LOW_Y = 520;
 export const LANE_MID_Y = 444;
 export const FLOOR_Y = 542;
-export const WORLD_PX_PER_SEC = DIFFICULTY_CONFIG.normal.worldPxPerSec;
+export const WORLD_PX_PER_SEC = DIFFICULTY_CONFIG.standard.worldPxPerSec;
 export const SEGMENT_WIDTH = WORLD_PX_PER_SEC * SLICE_DURATION_SEC;
 export const LEAD_IN_SEGMENTS = 8;
 
@@ -37,17 +37,17 @@ export interface CourseTuningProfile extends DifficultyDspTuning {
 }
 
 export const DIFFICULTY_COURSE_TUNING: Record<DifficultyMode, CourseTuningProfile> = {
-  easy: {
-    minBeatGapSec: 0.3,
-    fluxGate: 0.088,
-    madMultiplier: 1.32,
-    chordMinGapSec: 3.0,
-    holdMinGapSec: 4.8,
-    rushMinGapSec: 28.0,
+  casual: {
+    minBeatGapSec: 0.28,
+    fluxGate: 0.082,
+    madMultiplier: 1.26,
+    chordMinGapSec: 2.8,
+    holdMinGapSec: 4.5,
+    rushMinGapSec: 26.0,
     rushTargetHits: 6,
-    hazardMinGapSec: 3.6,
+    hazardMinGapSec: 3.4,
   },
-  normal: {
+  standard: {
     minBeatGapSec: 0.18,
     fluxGate: 0.062,
     madMultiplier: 1.05,
@@ -56,16 +56,6 @@ export const DIFFICULTY_COURSE_TUNING: Record<DifficultyMode, CourseTuningProfil
     rushMinGapSec: 22.0,
     rushTargetHits: 8,
     hazardMinGapSec: 2.3,
-  },
-  hard: {
-    minBeatGapSec: 0.125,
-    fluxGate: 0.044,
-    madMultiplier: 0.85,
-    chordMinGapSec: 1.3,
-    holdMinGapSec: 2.6,
-    rushMinGapSec: 18.0,
-    rushTargetHits: 10,
-    hazardMinGapSec: 1.6,
   },
 };
 
@@ -262,13 +252,13 @@ export async function analyzeTrackBlueprint(
   buffer: AudioBuffer,
   track: TrackMetadata,
   onProgress?: (status: LoadingProgress) => void,
-  difficulty: DifficultyMode = 'normal'
+  difficulty: DifficultyMode = 'standard'
 ): Promise<TrackBlueprint> {
   const diffCfg = DIFFICULTY_CONFIG[difficulty];
   const tuning = DIFFICULTY_COURSE_TUNING[difficulty];
   const worldPxPerSec = diffCfg.worldPxPerSec;
   const segWidth = worldPxPerSec * SLICE_DURATION_SEC;
-  const cacheKey = `${track.id}:${difficulty}:v6`;
+  const cacheKey = `${track.id}:${difficulty}:v7`;
 
   const cached = blueprintCache.get(cacheKey);
   if (cached) {
@@ -559,7 +549,7 @@ export async function analyzeTrackBlueprint(
         Math.max(0, Math.floor(anchor.timeSec / SLICE_DURATION_SEC))
       );
       const inten = dsp.sliceIntensity[sIdx] ?? 'groove';
-      if (difficulty === 'easy' && inten !== 'drop') continue;
+      if (difficulty === 'casual' && inten !== 'drop') continue;
       if (inten === 'calm') continue;
 
       // Place hazard 0.08s after an opposite-lane slash so hitting the note vaults/ducks cleanly!

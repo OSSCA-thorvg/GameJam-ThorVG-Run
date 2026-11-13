@@ -9,7 +9,7 @@ import {
   type TrackRecord,
 } from '../types/game';
 
-const RECORDS_STORAGE_KEY = 'thorvg_run:records:v1';
+const RECORDS_STORAGE_KEY = 'thorvg_run:records:v2';
 const SFX_MODE_STORAGE_KEY = 'thorvg_run:sfx_mode:v1';
 const UNLOCKED_SKINS_KEY = 'thorvg_run:unlocked_skins:v1';
 const SELECTED_SKIN_KEY = 'thorvg_run:selected_skin:v1';
